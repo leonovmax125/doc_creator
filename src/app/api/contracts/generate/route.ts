@@ -1,5 +1,9 @@
 import { NextResponse } from 'next/server';
-import { createClient } from '@/lib/supabase/server';
+import { randomUUID } from 'node:crypto';
+import { sql } from '@/lib/db';
+import { getCurrentUser } from '@/lib/auth/session';
+import { getObject, putObject } from '@/lib/storage/local';
+import { fileUrl } from '@/lib/files';
 import { renderContractDocx, type FieldResolution } from '@/lib/render-contract';
 import { getPngDimensions } from '@/lib/png-dimensions';
 import { sanitizeFilenamePart } from '@/lib/sanitize-filename';
@@ -16,21 +20,13 @@ type GenerateBody = {
   values: Record<string, string>;
   signatureId?: string | null;
   stampId?: string | null;
-  /** Название нового дела. Игнорируется, если передан caseId. */
   caseTitle?: string;
-  /** Если задан — создаём новую версию в существующем деле, а не новое дело. */
   caseId?: string | null;
 };
 
 export async function POST(request: Request) {
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-
-  if (!user) {
-    return NextResponse.json({ error: 'Не авторизован' }, { status: 401 });
-  }
+  const user = await getCurrentUser();
+  if (!user) return NextResponse.json({ error: 'Не авторизован' }, { status: 401 });
 
   const body = (await request.json()) as GenerateBody;
   const { templateId, clientId, values, signatureId, stampId, caseTitle, caseId } = body;
@@ -39,69 +35,57 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: 'Не хватает данных' }, { status: 400 });
   }
 
-  const { data: template } = await supabase
-    .from('templates')
-    .select('blocks, fields, source_file_path')
-    .eq('id', templateId)
-    .single();
+  const templateRows = await sql<{ blocks: unknown; fields: unknown; source_file_path: string }[]>`
+    select blocks, fields, source_file_path from templates
+    where id = ${templateId} and user_id = ${user.id} limit 1
+  `;
+  const template = templateRows[0];
+  if (!template) return NextResponse.json({ error: 'Шаблон не найден' }, { status: 404 });
 
-  if (!template) {
-    return NextResponse.json({ error: 'Шаблон не найден' }, { status: 404 });
-  }
+  const clientRows = await sql<{ id: string; name: string }[]>`
+    select id, name from clients where id = ${clientId} and user_id = ${user.id} limit 1
+  `;
+  const client = clientRows[0];
+  if (!client) return NextResponse.json({ error: 'Клиент не найден' }, { status: 404 });
 
-  const { data: client } = await supabase.from('clients').select('id, name').eq('id', clientId).single();
-  if (!client) {
-    return NextResponse.json({ error: 'Клиент не найден' }, { status: 404 });
-  }
+  const orgRequisites = await sql<{ field_key: string; field_value: string }[]>`
+    select r.field_key, r.field_value from requisites r
+    join organizations o on o.id = r.owner_id
+    where r.owner_type = 'organization' and o.owner_id = ${user.id}
+  `;
+  const clientRequisites = await sql<{ field_key: string; field_value: string }[]>`
+    select field_key, field_value from requisites
+    where owner_type = 'client' and owner_id = ${clientId}
+  `;
 
-  const { data: organization } = await supabase.from('organizations').select('id').single();
+  const orgValues = new Map(orgRequisites.map((r) => [r.field_key, r.field_value]));
+  const clientValues = new Map(clientRequisites.map((r) => [r.field_key, r.field_value]));
 
-  const { data: orgRequisites } = organization
-    ? await supabase
-        .from('requisites')
-        .select('field_key, field_value')
-        .eq('owner_type', 'organization')
-        .eq('owner_id', organization.id)
-    : { data: [] };
-
-  const { data: clientRequisites } = await supabase
-    .from('requisites')
-    .select('field_key, field_value')
-    .eq('owner_type', 'client')
-    .eq('owner_id', clientId);
-
-  const orgValues = new Map((orgRequisites ?? []).map((r) => [r.field_key, r.field_value]));
-  const clientValues = new Map((clientRequisites ?? []).map((r) => [r.field_key, r.field_value]));
-
-  const { data: templateFile, error: downloadError } = await supabase.storage
-    .from('templates')
-    .download(template.source_file_path);
-
-  if (downloadError || !templateFile) {
+  let templateBuffer: Buffer;
+  try {
+    templateBuffer = await getObject('templates', template.source_file_path);
+  } catch {
     return NextResponse.json({ error: 'Не удалось загрузить файл шаблона' }, { status: 500 });
   }
-
-  const templateBuffer = Buffer.from(await templateFile.arrayBuffer());
 
   async function loadStampImage(
     stampRowId: string | null | undefined,
     widthCm: number,
   ): Promise<{ width: number; height: number; data: string; extension: '.png' } | null> {
     if (!stampRowId) return null;
-    const { data: stampRow } = await supabase
-      .from('stamps')
-      .select('file_path')
-      .eq('id', stampRowId)
-      .single();
-    if (!stampRow) return null;
+    const rows = await sql<{ file_path: string }[]>`
+      select file_path from stamps where id = ${stampRowId} and user_id = ${user!.id} limit 1
+    `;
+    if (!rows[0]) return null;
 
-    const { data: file } = await supabase.storage.from('stamps').download(stampRow.file_path);
-    if (!file) return null;
-
-    const buffer = Buffer.from(await file.arrayBuffer());
+    let buffer: Buffer;
+    try {
+      buffer = await getObject('stamps', rows[0].file_path);
+    } catch {
+      return null;
+    }
     const dims = getPngDimensions(buffer);
     const height = dims ? widthCm * (dims.height / dims.width) : widthCm;
-
     return { width: widthCm, height, data: buffer.toString('base64'), extension: '.png' };
   }
 
@@ -144,62 +128,44 @@ export async function POST(request: Request) {
 
   const dateStr = new Date().toISOString().slice(0, 10);
   const suggestedName = `Договор_${sanitizeFilenamePart(client.name)}_${dateStr}.docx`;
-  const storagePath = `${user.id}/${crypto.randomUUID()}.docx`;
+  const storagePath = `${user.id}/${randomUUID()}.docx`;
+  await putObject('contracts', storagePath, renderResult.buffer);
 
-  const { error: uploadError } = await supabase.storage
-    .from('contracts')
-    .upload(storagePath, renderResult.buffer, {
-      contentType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-    });
-
-  if (uploadError) {
-    return NextResponse.json({ error: 'Не удалось сохранить готовый файл' }, { status: 500 });
-  }
-
-  // Договор кладётся в дело: либо в переданное (новая версия), либо создаём новое.
   let resolvedCaseId = caseId ?? null;
   let versionNumber = 1;
 
   if (resolvedCaseId) {
-    const { data: lastVersion } = await supabase
-      .from('contract_versions')
-      .select('version_number')
-      .eq('case_id', resolvedCaseId)
-      .order('version_number', { ascending: false })
-      .limit(1)
-      .maybeSingle();
-    versionNumber = (lastVersion?.version_number ?? 0) + 1;
+    // Проверяем, что дело принадлежит пользователю.
+    const owned = await sql`select 1 from cases where id = ${resolvedCaseId} and user_id = ${user.id} limit 1`;
+    if (owned.length === 0) return NextResponse.json({ error: 'Дело не найдено' }, { status: 404 });
+
+    const last = await sql<{ version_number: number }[]>`
+      select version_number from contract_versions where case_id = ${resolvedCaseId}
+      order by version_number desc limit 1
+    `;
+    versionNumber = (last[0]?.version_number ?? 0) + 1;
   } else {
     const title = caseTitle?.trim() || `Договор с ${client.name}`;
-    const { data: newCase, error: caseError } = await supabase
-      .from('cases')
-      .insert({ user_id: user.id, client_id: clientId, title, status: 'draft' })
-      .select('id')
-      .single();
-
-    if (caseError || !newCase) {
-      return NextResponse.json({ error: 'Не удалось создать дело' }, { status: 500 });
-    }
-    resolvedCaseId = newCase.id;
+    const created = await sql<{ id: string }[]>`
+      insert into cases (user_id, client_id, title, status)
+      values (${user.id}, ${clientId}, ${title}, 'draft')
+      returning id
+    `;
+    resolvedCaseId = created[0].id;
   }
 
-  const { error: versionError } = await supabase.from('contract_versions').insert({
-    case_id: resolvedCaseId,
-    version_number: versionNumber,
-    mode: 'strict',
-    template_id: templateId,
-    blocks: normalizeBlocks(template.blocks),
-    data: { values, signatureId: signatureId ?? null, stampId: stampId ?? null },
-    docx_path: storagePath,
-  });
-
-  if (versionError) {
-    return NextResponse.json({ error: 'Не удалось сохранить версию договора' }, { status: 500 });
-  }
-
-  // Имя файла при скачивании задаёт браузер (см. handleDownload в contract-wizard.tsx) —
-  // Supabase некорректно кодирует кириллицу в заголовке Content-Disposition.
-  const { data: signed } = await supabase.storage.from('contracts').createSignedUrl(storagePath, 3600);
+  await sql`
+    insert into contract_versions (case_id, version_number, mode, template_id, blocks, data, docx_path)
+    values (
+      ${resolvedCaseId},
+      ${versionNumber},
+      'strict',
+      ${templateId},
+      ${sql.json(normalizeBlocks(template.blocks))},
+      ${sql.json({ values, signatureId: signatureId ?? null, stampId: stampId ?? null })},
+      ${storagePath}
+    )
+  `;
 
   const warnings = [
     ...renderResult.unfilledFieldNames.map((name) => `Поле «${name}» осталось пустым`),
@@ -209,7 +175,7 @@ export async function POST(request: Request) {
   ];
 
   return NextResponse.json({
-    url: signed?.signedUrl ?? null,
+    url: fileUrl('contracts', storagePath),
     filename: suggestedName,
     warnings,
     caseId: resolvedCaseId,

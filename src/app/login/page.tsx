@@ -3,8 +3,6 @@
 import { useState, type FormEvent } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
-import { createClient } from '@/lib/supabase/client';
-import { translateAuthError } from '@/lib/auth-errors';
 import { PasswordField } from '@/components/password-field';
 
 export default function LoginPage() {
@@ -19,14 +17,15 @@ export default function LoginPage() {
     setError(null);
     setLoading(true);
 
-    const supabase = createClient();
-    const { error: signInError } = await supabase.auth.signInWithPassword({
-      email,
-      password,
+    const response = await fetch('/api/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, password }),
     });
 
-    if (signInError) {
-      setError(translateAuthError(signInError.message));
+    if (!response.ok) {
+      const data = await response.json().catch(() => null);
+      setError(data?.error ?? 'Не удалось войти. Попробуйте ещё раз.');
       setLoading(false);
       return;
     }

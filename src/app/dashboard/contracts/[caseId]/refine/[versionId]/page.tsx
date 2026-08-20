@@ -1,6 +1,8 @@
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
-import { createClient } from '@/lib/supabase/server';
+import { sql } from '@/lib/db';
+import { getCurrentUser } from '@/lib/auth/session';
+import { fileUrl } from '@/lib/files';
 import { RefineChat } from '@/components/refine-chat';
 
 export default async function RefinePage({
@@ -9,27 +11,22 @@ export default async function RefinePage({
   params: Promise<{ caseId: string; versionId: string }>;
 }) {
   const { caseId, versionId } = await params;
-  const supabase = await createClient();
+  const user = await getCurrentUser();
+  if (!user) notFound();
 
-  const { data: version } = await supabase
-    .from('contract_versions')
-    .select('id, case_id, version_number, docx_path')
-    .eq('id', versionId)
-    .single();
-
+  const versionRows = await sql<{ id: string; case_id: string; version_number: number; docx_path: string | null }[]>`
+    select v.id, v.case_id, v.version_number, v.docx_path
+    from contract_versions v
+    join cases c on c.id = v.case_id
+    where v.id = ${versionId} and c.user_id = ${user.id}
+    limit 1
+  `;
+  const version = versionRows[0];
   if (!version || version.case_id !== caseId) notFound();
 
-  const { data: messages } = await supabase
-    .from('chat_messages')
-    .select('id, role, content')
-    .eq('version_id', versionId)
-    .order('created_at');
-
-  let url: string | null = null;
-  if (version.docx_path) {
-    const { data } = await supabase.storage.from('contracts').createSignedUrl(version.docx_path, 3600);
-    url = data?.signedUrl ?? null;
-  }
+  const messages = await sql<{ id: string; role: 'user' | 'assistant'; content: string }[]>`
+    select id, role, content from chat_messages where version_id = ${versionId} order by created_at
+  `;
 
   const dateStr = new Date().toISOString().slice(0, 10);
 
@@ -44,8 +41,8 @@ export default async function RefinePage({
       <RefineChat
         versionId={version.id}
         versionNumber={version.version_number}
-        initialMessages={(messages ?? []) as { id: string; role: 'user' | 'assistant'; content: string }[]}
-        initialUrl={url}
+        initialMessages={messages}
+        initialUrl={fileUrl('contracts', version.docx_path)}
         initialFilename={`Договор_${dateStr}.docx`}
       />
     </div>

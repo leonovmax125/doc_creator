@@ -2,12 +2,13 @@ import 'server-only';
 import { randomBytes } from 'node:crypto';
 import { cookies } from 'next/headers';
 import { sql } from '@/lib/db';
+import { SESSION_COOKIE } from './constants';
 
 // Сессии на стороне сервера: непубличный token в httpOnly-cookie + строка в
 // таблице sessions. Заменяет Supabase Auth. Чужую сессию подделать нельзя —
 // token случайный (256 бит) и сверяется с БД.
 
-const COOKIE = 'doc_session';
+const COOKIE = SESSION_COOKIE;
 const MAX_AGE_SECONDS = 60 * 60 * 24 * 30; // 30 дней
 
 export type SessionUser = {
@@ -66,5 +67,4 @@ export async function requireUser(): Promise<SessionUser> {
   return user;
 }
 
-/** Только имя cookie — нужно middleware для быстрой проверки наличия сессии. */
-export const SESSION_COOKIE = COOKIE;
+export { SESSION_COOKIE };

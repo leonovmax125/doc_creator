@@ -1,5 +1,9 @@
 import { NextResponse } from 'next/server';
-import { createClient } from '@/lib/supabase/server';
+import { randomUUID } from 'node:crypto';
+import { sql } from '@/lib/db';
+import { getCurrentUser } from '@/lib/auth/session';
+import { getObject, putObject, deleteObject } from '@/lib/storage/local';
+import { fileUrl } from '@/lib/files';
 import { generateJson, resolveGeminiKey, GEMINI_FLASH } from '@/lib/gemini';
 import { buildPatchPrompt } from '@/lib/ai-prompts';
 import { applyDocxPatch, type PatchEdit } from '@/lib/apply-docx-patch';
@@ -14,10 +18,7 @@ type Requisite = { field_label: string; field_value: string };
 
 /** Дорабатывает текущий .docx версии по инструкции, сохраняя оформление. */
 export async function POST(request: Request) {
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const user = await getCurrentUser();
   if (!user) return NextResponse.json({ error: 'Не авторизован' }, { status: 401 });
 
   const { versionId, instruction: rawInstruction } = (await request.json()) as {
@@ -29,24 +30,23 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: 'Опишите, что поправить' }, { status: 400 });
   }
 
-  const { data: version } = await supabase
-    .from('contract_versions')
-    .select('id, docx_path, case:cases(client_id, title, client:clients(name))')
-    .eq('id', versionId)
-    .single();
+  const versionRows = await sql<
+    { docx_path: string | null; client_id: string; client_name: string }[]
+  >`
+    select v.docx_path, c.client_id, cl.name as client_name
+    from contract_versions v
+    join cases c on c.id = v.case_id
+    join clients cl on cl.id = c.client_id
+    where v.id = ${versionId} and c.user_id = ${user.id}
+    limit 1
+  `;
+  const version = versionRows[0];
   if (!version || !version.docx_path) {
     return NextResponse.json({ error: 'Версия не найдена' }, { status: 404 });
   }
+  const clientName = version.client_name ?? 'клиент';
 
-  const caseRow = (Array.isArray(version.case) ? version.case[0] : version.case) as
-    | { client_id: string; title: string; client: { name: string } | { name: string }[] | null }
-    | null;
-  const client = caseRow
-    ? ((Array.isArray(caseRow.client) ? caseRow.client[0] : caseRow.client) as { name: string } | null)
-    : null;
-  const clientName = client?.name ?? 'клиент';
-
-  const apiKey = await resolveGeminiKey(supabase);
+  const apiKey = await resolveGeminiKey(user.id);
   if (!apiKey) {
     return NextResponse.json(
       { error: 'Не задан ключ Gemini. Добавьте свой ключ в Настройках → Ключи ИИ.' },
@@ -54,35 +54,26 @@ export async function POST(request: Request) {
     );
   }
 
-  // Реквизиты сторон — на случай, если правка просит подставить данные.
-  const { data: organization } = await supabase.from('organizations').select('id').single();
-  const { data: orgReqRows } = organization
-    ? await supabase
-        .from('requisites')
-        .select('field_label, field_value')
-        .eq('owner_type', 'organization')
-        .eq('owner_id', organization.id)
-        .order('sort_order')
-    : { data: [] };
-  const { data: clientReqRows } = caseRow
-    ? await supabase
-        .from('requisites')
-        .select('field_label, field_value')
-        .eq('owner_type', 'client')
-        .eq('owner_id', caseRow.client_id)
-        .order('sort_order')
-    : { data: [] };
-  const orgRequisites = ((orgReqRows ?? []) as Requisite[]).filter((r) => r.field_value);
-  const clientRequisites = ((clientReqRows ?? []) as Requisite[]).filter((r) => r.field_value);
+  const orgReqRows = await sql<Requisite[]>`
+    select r.field_label, r.field_value from requisites r
+    join organizations o on o.id = r.owner_id
+    where r.owner_type = 'organization' and o.owner_id = ${user.id}
+    order by r.sort_order
+  `;
+  const clientReqRows = await sql<Requisite[]>`
+    select field_label, field_value from requisites
+    where owner_type = 'client' and owner_id = ${version.client_id}
+    order by sort_order
+  `;
+  const orgRequisites = orgReqRows.filter((r) => r.field_value);
+  const clientRequisites = clientReqRows.filter((r) => r.field_value);
 
-  // Текущий .docx версии — его и патчим.
-  const { data: file, error: downloadError } = await supabase.storage
-    .from('contracts')
-    .download(version.docx_path);
-  if (downloadError || !file) {
+  let currentBuffer: Buffer;
+  try {
+    currentBuffer = await getObject('contracts', version.docx_path);
+  } catch {
     return NextResponse.json({ error: 'Не удалось загрузить документ версии' }, { status: 500 });
   }
-  const currentBuffer = Buffer.from(await file.arrayBuffer());
 
   let documentText: string;
   try {
@@ -116,16 +107,8 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: 'Не удалось применить правки' }, { status: 500 });
   }
 
-  // Обновляем документ версии на месте (рабочий черновик).
-  const storagePath = `${user.id}/${crypto.randomUUID()}.docx`;
-  const { error: uploadError } = await supabase.storage
-    .from('contracts')
-    .upload(storagePath, patched.buffer, {
-      contentType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-    });
-  if (uploadError) {
-    return NextResponse.json({ error: 'Не удалось сохранить документ' }, { status: 500 });
-  }
+  const storagePath = `${user.id}/${randomUUID()}.docx`;
+  await putObject('contracts', storagePath, patched.buffer);
 
   let newBlocks;
   try {
@@ -134,22 +117,23 @@ export async function POST(request: Request) {
     newBlocks = null;
   }
 
-  await supabase
-    .from('contract_versions')
-    .update({ docx_path: storagePath, ...(newBlocks ? { blocks: newBlocks } : {}) })
-    .eq('id', versionId);
+  if (newBlocks) {
+    await sql`
+      update contract_versions set docx_path = ${storagePath}, blocks = ${sql.json(newBlocks)}
+      where id = ${versionId}
+    `;
+  } else {
+    await sql`update contract_versions set docx_path = ${storagePath} where id = ${versionId}`;
+  }
 
-  // Удаляем прежний файл, чтобы не копить мусор в хранилище.
-  await supabase.storage.from('contracts').remove([version.docx_path]);
+  // Удаляем прежний файл, чтобы не копить мусор.
+  await deleteObject('contracts', version.docx_path);
 
   const dateStr = new Date().toISOString().slice(0, 10);
   const filename = `Договор_${sanitizeFilenamePart(clientName)}_${dateStr}.docx`;
-  const { data: signed } = await supabase.storage
-    .from('contracts')
-    .createSignedUrl(storagePath, 3600);
 
   return NextResponse.json({
-    url: signed?.signedUrl ?? null,
+    url: fileUrl('contracts', storagePath),
     filename,
     applied: patched.applied,
     skipped: patched.skipped,

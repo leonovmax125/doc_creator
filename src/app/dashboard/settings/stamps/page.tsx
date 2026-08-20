@@ -1,30 +1,22 @@
-import { createClient } from '@/lib/supabase/server';
+import { sql } from '@/lib/db';
+import { getCurrentUser } from '@/lib/auth/session';
+import { fileUrl } from '@/lib/files';
 import { StampsManager, type StampWithUrl } from '@/components/stamps-manager';
 
 export default async function StampsPage() {
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-
+  const user = await getCurrentUser();
   if (!user) return null;
 
-  const { data: stamps } = await supabase
-    .from('stamps')
-    .select('id, name, type, file_path')
-    .order('created_at', { ascending: false });
+  const stamps = await sql<{ id: string; name: string; type: 'signature' | 'stamp'; file_path: string }[]>`
+    select id, name, type, file_path from stamps where user_id = ${user.id} order by created_at desc
+  `;
 
-  const withUrls: StampWithUrl[] = await Promise.all(
-    (stamps ?? []).map(async (stamp) => {
-      const { data } = await supabase.storage.from('stamps').createSignedUrl(stamp.file_path, 3600);
-      return {
-        id: stamp.id,
-        name: stamp.name,
-        type: stamp.type,
-        signedUrl: data?.signedUrl ?? null,
-      };
-    }),
-  );
+  const withUrls: StampWithUrl[] = stamps.map((s) => ({
+    id: s.id,
+    name: s.name,
+    type: s.type,
+    signedUrl: fileUrl('stamps', s.file_path),
+  }));
 
   return <StampsManager userId={user.id} stamps={withUrls} />;
 }

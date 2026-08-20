@@ -3,8 +3,6 @@
 import { useState, type FormEvent } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
-import { createClient } from '@/lib/supabase/client';
-import { translateAuthError } from '@/lib/auth-errors';
 import { PasswordField } from '@/components/password-field';
 
 export default function RegisterPage() {
@@ -27,41 +25,16 @@ export default function RegisterPage() {
     }
 
     setLoading(true);
-    const supabase = createClient();
-    const trimmedCode = inviteCode.trim();
 
-    const { data: isCodeValid, error: checkError } = await supabase.rpc(
-      'check_invite_code',
-      { p_code: trimmedCode },
-    );
-
-    if (checkError || !isCodeValid) {
-      setError('Код приглашения недействителен или уже использован');
-      setLoading(false);
-      return;
-    }
-
-    const { error: signUpError } = await supabase.auth.signUp({
-      email,
-      password,
-      options: { data: { full_name: fullName } },
+    const response = await fetch('/api/auth/register', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ fullName, email, password, inviteCode }),
     });
 
-    if (signUpError) {
-      setError(translateAuthError(signUpError.message));
-      setLoading(false);
-      return;
-    }
-
-    const { error: redeemError } = await supabase.rpc('redeem_invite_code', {
-      p_code: trimmedCode,
-      p_full_name: fullName,
-    });
-
-    if (redeemError) {
-      setError(
-        'Аккаунт создан, но не удалось погасить код приглашения. Обратитесь к тому, кто его выдал.',
-      );
+    if (!response.ok) {
+      const data = await response.json().catch(() => null);
+      setError(data?.error ?? 'Не удалось зарегистрироваться. Попробуйте ещё раз.');
       setLoading(false);
       return;
     }

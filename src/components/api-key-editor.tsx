@@ -1,18 +1,15 @@
 'use client';
 
 import { useState } from 'react';
-import { createClient } from '@/lib/supabase/client';
 
 export function ApiKeyEditor({
-  userId,
   hasKey,
   maskedKey,
 }: {
-  userId: string;
+  userId?: string;
   hasKey: boolean;
   maskedKey: string | null;
 }) {
-  const supabase = createClient();
   const [value, setValue] = useState('');
   const [saved, setSaved] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -21,10 +18,10 @@ export function ApiKeyEditor({
   async function save() {
     if (!value.trim()) return;
     setBusy(true);
-    await supabase.from('user_settings').upsert({
-      user_id: userId,
-      gemini_api_key: value.trim(),
-      updated_at: new Date().toISOString(),
+    await fetch('/api/settings/api-key', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ key: value.trim() }),
     });
     setBusy(false);
     setValue('');
@@ -34,7 +31,7 @@ export function ApiKeyEditor({
 
   async function remove() {
     setBusy(true);
-    await supabase.from('user_settings').update({ gemini_api_key: null }).eq('user_id', userId);
+    await fetch('/api/settings/api-key', { method: 'DELETE' });
     setBusy(false);
     setCurrentHasKey(false);
     setSaved(null);

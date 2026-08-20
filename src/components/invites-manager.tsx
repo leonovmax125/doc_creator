@@ -1,7 +1,6 @@
 'use client';
 
 import { useState } from 'react';
-import { createClient } from '@/lib/supabase/client';
 
 export type InviteRow = {
   code: string;
@@ -18,7 +17,6 @@ function randomCode() {
 }
 
 export function InvitesManager({ initialCodes }: { initialCodes: InviteRow[] }) {
-  const supabase = createClient();
   const [codes, setCodes] = useState<InviteRow[]>(initialCodes);
   const [custom, setCustom] = useState('');
   const [busy, setBusy] = useState(false);
@@ -31,27 +29,25 @@ export function InvitesManager({ initialCodes }: { initialCodes: InviteRow[] }) 
     setBusy(true);
     setError(null);
 
-    const { data, error: insertError } = await supabase
-      .from('invite_codes')
-      .insert({ code: trimmed })
-      .select('code, is_used, created_at')
-      .single();
+    const response = await fetch('/api/invites', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ code: trimmed }),
+    });
 
     setBusy(false);
-    if (insertError || !data) {
-      setError(
-        insertError?.code === '23505'
-          ? 'Такой код уже существует'
-          : 'Не удалось создать код (нужны права администратора)',
-      );
+    if (!response.ok) {
+      const data = await response.json().catch(() => null);
+      setError(data?.error ?? 'Не удалось создать код (нужны права администратора)');
       return;
     }
-    setCodes((prev) => [data as InviteRow, ...prev]);
+    const { invite } = await response.json();
+    setCodes((prev) => [invite as InviteRow, ...prev]);
     setCustom('');
   }
 
   async function remove(code: string) {
-    await supabase.from('invite_codes').delete().eq('code', code);
+    await fetch(`/api/invites/${encodeURIComponent(code)}`, { method: 'DELETE' });
     setCodes((prev) => prev.filter((c) => c.code !== code));
   }
 

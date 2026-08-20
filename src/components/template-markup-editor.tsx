@@ -1,7 +1,6 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import { createClient } from '@/lib/supabase/client';
 import { MarkFieldDialog } from './mark-field-dialog';
 import {
   getMarkableUnits,
@@ -66,7 +65,6 @@ export function TemplateMarkupEditor({
   const [selection, setSelection] = useState<{ unitId: string; text: string } | null>(null);
   const [dialog, setDialog] = useState<{ unitId: string; text: string } | null>(null);
 
-  const supabase = createClient();
   const unitRefs = useRef<Map<string, HTMLElement>>(new Map());
   const dialogOpenRef = useRef(false);
 
@@ -103,13 +101,18 @@ export function TemplateMarkupEditor({
     return () => document.removeEventListener('selectionchange', onSelectionChange);
   }, []);
 
-  async function persist(patch: { blocks?: Block[]; fields?: TemplateField[] }) {
-    await supabase.from('templates').update(patch).eq('id', templateId);
+  async function patchTemplate(
+    patch: { blocks?: Block[]; fields?: TemplateField[]; name?: string; category?: string | null },
+  ) {
+    await fetch(`/api/templates/${templateId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(patch),
+    });
   }
 
-  async function persistMeta(patch: { name?: string; category?: string | null }) {
-    await supabase.from('templates').update(patch).eq('id', templateId);
-  }
+  const persist = patchTemplate;
+  const persistMeta = patchTemplate;
 
   const [autoBusy, setAutoBusy] = useState(false);
   const [autoMsg, setAutoMsg] = useState<string | null>(null);

@@ -2,7 +2,6 @@
 
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { createClient } from '@/lib/supabase/client';
 import { MATERIAL_TYPES, MATERIAL_TYPE_LABELS, type MaterialType } from '@/lib/material-types';
 
 type Material = {
@@ -16,7 +15,6 @@ type Material = {
 
 export function MaterialEditor({ material }: { material: Material }) {
   const router = useRouter();
-  const supabase = createClient();
 
   const [name, setName] = useState(material.name);
   const [type, setType] = useState<MaterialType>(material.type);
@@ -25,9 +23,10 @@ export function MaterialEditor({ material }: { material: Material }) {
   const [savedAt, setSavedAt] = useState<string | null>(null);
 
   async function handleSave() {
-    await supabase
-      .from('materials')
-      .update({
+    await fetch(`/api/materials/${material.id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
         name: name.trim(),
         type,
         content_text: contentText,
@@ -35,14 +34,14 @@ export function MaterialEditor({ material }: { material: Material }) {
           .split(',')
           .map((t) => t.trim())
           .filter(Boolean),
-      })
-      .eq('id', material.id);
+      }),
+    });
     setSavedAt(new Date().toLocaleTimeString('ru-RU'));
   }
 
   async function handleDelete() {
     if (!confirm('Удалить материал?')) return;
-    await supabase.from('materials').delete().eq('id', material.id);
+    await fetch(`/api/materials/${material.id}`, { method: 'DELETE' });
     router.push('/dashboard/materials');
   }
 

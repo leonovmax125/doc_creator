@@ -2,7 +2,6 @@
 
 import { useState, type FormEvent } from 'react';
 import { useRouter } from 'next/navigation';
-import { createClient } from '@/lib/supabase/client';
 import { hasTransparency } from '@/lib/check-transparency';
 
 export type StampWithUrl = {
@@ -12,9 +11,8 @@ export type StampWithUrl = {
   signedUrl: string | null;
 };
 
-export function StampsManager({ userId, stamps }: { userId: string; stamps: StampWithUrl[] }) {
+export function StampsManager({ stamps }: { userId?: string; stamps: StampWithUrl[] }) {
   const router = useRouter();
-  const supabase = createClient();
 
   const [name, setName] = useState('');
   const [type, setType] = useState<'signature' | 'stamp'>('signature');
@@ -37,23 +35,15 @@ export function StampsManager({ userId, stamps }: { userId: string; stamps: Stam
     setError(null);
     setUploading(true);
 
-    const path = `${userId}/${crypto.randomUUID()}.png`;
-    const { error: uploadError } = await supabase.storage
-      .from('stamps')
-      .upload(path, file, { contentType: 'image/png' });
+    const form = new FormData();
+    form.set('file', file);
+    form.set('name', name.trim());
+    form.set('type', type);
+    const response = await fetch('/api/stamps', { method: 'POST', body: form });
 
-    if (uploadError) {
-      setError('Не удалось загрузить файл');
-      setUploading(false);
-      return;
-    }
-
-    const { error: insertError } = await supabase
-      .from('stamps')
-      .insert({ user_id: userId, name: name.trim(), type, file_path: path });
-
-    if (insertError) {
-      setError('Файл загружен, но не удалось сохранить запись');
+    if (!response.ok) {
+      const data = await response.json().catch(() => null);
+      setError(data?.error ?? 'Не удалось загрузить файл');
       setUploading(false);
       return;
     }
@@ -66,7 +56,7 @@ export function StampsManager({ userId, stamps }: { userId: string; stamps: Stam
   }
 
   async function handleDelete(stamp: StampWithUrl) {
-    await supabase.from('stamps').delete().eq('id', stamp.id);
+    await fetch(`/api/stamps/${stamp.id}`, { method: 'DELETE' });
     router.refresh();
   }
 

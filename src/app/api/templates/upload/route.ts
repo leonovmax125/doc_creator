@@ -1,18 +1,15 @@
 import { NextResponse } from 'next/server';
-import { createClient } from '@/lib/supabase/server';
+import { randomUUID } from 'node:crypto';
+import { sql } from '@/lib/db';
+import { getCurrentUser } from '@/lib/auth/session';
+import { putObject } from '@/lib/storage/local';
 import { parseDocxToBlocks } from '@/lib/docx-to-blocks';
 
 export const runtime = 'nodejs';
 
 export async function POST(request: Request) {
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-
-  if (!user) {
-    return NextResponse.json({ error: 'Не авторизован' }, { status: 401 });
-  }
+  const user = await getCurrentUser();
+  if (!user) return NextResponse.json({ error: 'Не авторизован' }, { status: 401 });
 
   const formData = await request.formData();
   const file = formData.get('file');
@@ -23,19 +20,9 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: 'Не хватает данных для загрузки' }, { status: 400 });
   }
 
-  const arrayBuffer = await file.arrayBuffer();
-  const buffer = Buffer.from(arrayBuffer);
-
-  const path = `${user.id}/${crypto.randomUUID()}.docx`;
-  const { error: uploadError } = await supabase.storage
-    .from('templates')
-    .upload(path, buffer, {
-      contentType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-    });
-
-  if (uploadError) {
-    return NextResponse.json({ error: 'Не удалось загрузить файл' }, { status: 500 });
-  }
+  const buffer = Buffer.from(await file.arrayBuffer());
+  const path = `${user.id}/${randomUUID()}.docx`;
+  await putObject('templates', path, buffer);
 
   let blocks;
   try {
@@ -44,22 +31,18 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: 'Не удалось разобрать документ' }, { status: 500 });
   }
 
-  const { data: template, error: insertError } = await supabase
-    .from('templates')
-    .insert({
-      user_id: user.id,
-      name: name.trim(),
-      category: typeof category === 'string' && category.trim() ? category.trim() : null,
-      source_file_path: path,
-      blocks,
-      fields: [],
-    })
-    .select('id')
-    .single();
+  const rows = await sql<{ id: string }[]>`
+    insert into templates (user_id, name, category, source_file_path, blocks, fields)
+    values (
+      ${user.id},
+      ${name.trim()},
+      ${typeof category === 'string' && category.trim() ? category.trim() : null},
+      ${path},
+      ${sql.json(blocks)},
+      ${sql.json([])}
+    )
+    returning id
+  `;
 
-  if (insertError || !template) {
-    return NextResponse.json({ error: 'Не удалось сохранить шаблон' }, { status: 500 });
-  }
-
-  return NextResponse.json({ id: template.id });
+  return NextResponse.json({ id: rows[0].id });
 }

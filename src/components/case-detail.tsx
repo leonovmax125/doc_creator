@@ -2,7 +2,6 @@
 
 import { useState } from 'react';
 import Link from 'next/link';
-import { createClient } from '@/lib/supabase/client';
 import {
   CASE_STATUSES,
   CASE_STATUS_LABELS,
@@ -36,12 +35,15 @@ export function CaseDetail({
   clientName: string;
   versions: CaseVersionItem[];
 }) {
-  const supabase = createClient();
   const [status, setStatus] = useState<CaseStatus>(initialStatus);
 
   async function changeStatus(next: CaseStatus) {
     setStatus(next);
-    await supabase.from('cases').update({ status: next }).eq('id', caseId);
+    await fetch(`/api/cases/${caseId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status: next }),
+    });
   }
 
   async function handleDownload(url: string, versionNumber: number) {

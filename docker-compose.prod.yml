@@ -1,0 +1,50 @@
+# Полный стек на VPS: приложение + Postgres. Файлы и база — на постоянных томах.
+# Запуск:  docker compose -f docker-compose.prod.yml up -d --build
+#
+# Перед запуском создайте .env рядом с этим файлом (см. .env.vps.example) —
+# как минимум POSTGRES_PASSWORD, DATABASE_URL, GEMINI_API_KEY, APP_URL, SMTP_*.
+
+services:
+  db:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-doc}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?нужен POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:-doc_creator}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./deploy/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U ${POSTGRES_USER:-doc} -d ${POSTGRES_DB:-doc_creator}']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  app:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      # Внутри сети compose база доступна по имени сервиса db.
+      DATABASE_URL: postgres://${POSTGRES_USER:-doc}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-doc_creator}
+      STORAGE_DIR: /data/storage
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      ADMIN_EMAIL: ${ADMIN_EMAIL:-}
+      APP_URL: ${APP_URL:-}
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      SMTP_FROM: ${SMTP_FROM:-}
+    volumes:
+      - storage:/data/storage
+    ports:
+      # Наружу отдаём на localhost; публичный доступ — через Nginx + HTTPS.
+      - '127.0.0.1:3000:3000'
+
+volumes:
+  pgdata:
+  storage:

@@ -1,12 +1,18 @@
 'use client';
 
 import { useState } from 'react';
-import { createClient } from '@/lib/supabase/client';
 import { REQUISITES_PRESETS } from '@/lib/requisites-presets';
 import { slugifyFieldKey } from '@/lib/slugify';
 
 export type Requisite = {
   id: string;
+  field_key: string;
+  field_label: string;
+  field_value: string;
+  sort_order: number;
+};
+
+type NewRow = {
   field_key: string;
   field_label: string;
   field_value: string;
@@ -27,10 +33,22 @@ export function RequisitesEditor({
   const [items, setItems] = useState<Requisite[]>(
     [...initialRequisites].sort((a, b) => a.sort_order - b.sort_order),
   );
-  const supabase = createClient();
 
   function nextSortOrder() {
     return items.length ? Math.max(...items.map((i) => i.sort_order)) + 1 : 0;
+  }
+
+  // Отправляет новые строки на сервер и возвращает созданные (с id из БД).
+  async function insertRows(rows: NewRow[]): Promise<Requisite[]> {
+    if (rows.length === 0) return [];
+    const response = await fetch('/api/requisites', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ownerType, ownerId, rows }),
+    });
+    if (!response.ok) return [];
+    const { requisites } = await response.json();
+    return requisites as Requisite[];
   }
 
   async function addRow() {
@@ -39,20 +57,10 @@ export function RequisitesEditor({
       label,
       items.map((i) => i.field_key),
     );
-    const { data, error } = await supabase
-      .from('requisites')
-      .insert({
-        owner_type: ownerType,
-        owner_id: ownerId,
-        field_key: key,
-        field_label: label,
-        field_value: '',
-        sort_order: nextSortOrder(),
-      })
-      .select()
-      .single();
-
-    if (!error && data) setItems((prev) => [...prev, data as Requisite]);
+    const created = await insertRows([
+      { field_key: key, field_label: label, field_value: '', sort_order: nextSortOrder() },
+    ]);
+    if (created[0]) setItems((prev) => [...prev, created[0]]);
   }
 
   async function applyPreset(presetId: (typeof REQUISITES_PRESETS)[number]['id']) {
@@ -66,17 +74,15 @@ export function RequisitesEditor({
     if (missing.length === 0) return;
 
     const base = nextSortOrder();
-    const rows = missing.map((field, index) => ({
-      owner_type: ownerType,
-      owner_id: ownerId,
-      field_key: field.key,
-      field_label: field.label,
-      field_value: '',
-      sort_order: base + index,
-    }));
-
-    const { data, error } = await supabase.from('requisites').insert(rows).select();
-    if (!error && data) setItems((prev) => [...prev, ...(data as Requisite[])]);
+    const created = await insertRows(
+      missing.map((field, index) => ({
+        field_key: field.key,
+        field_label: field.label,
+        field_value: '',
+        sort_order: base + index,
+      })),
+    );
+    if (created.length) setItems((prev) => [...prev, ...created]);
   }
 
   const [extracting, setExtracting] = useState(false);
@@ -103,12 +109,10 @@ export function RequisitesEditor({
 
     const existingKeys = items.map((i) => i.field_key);
     const base = nextSortOrder();
-    const rows = requisites.map((r, index) => {
+    const rows: NewRow[] = requisites.map((r, index) => {
       const key = slugifyFieldKey(r.label, existingKeys);
       existingKeys.push(key);
       return {
-        owner_type: ownerType,
-        owner_id: ownerId,
         field_key: key,
         field_label: r.label,
         field_value: r.value,
@@ -116,15 +120,13 @@ export function RequisitesEditor({
       };
     });
 
-    if (rows.length > 0) {
-      const { data, error } = await supabase.from('requisites').insert(rows).select();
-      if (!error && data) setItems((prev) => [...prev, ...(data as Requisite[])]);
-    }
+    const created = await insertRows(rows);
+    if (created.length) setItems((prev) => [...prev, ...created]);
 
     setExtracting(false);
     setExtractMsg(
-      rows.length > 0
-        ? `Добавлено полей: ${rows.length}. Проверьте значения ниже.`
+      created.length > 0
+        ? `Добавлено полей: ${created.length}. Проверьте значения ниже.`
         : 'ИИ не нашёл реквизитов в документе.',
     );
   }
@@ -134,12 +136,16 @@ export function RequisitesEditor({
   }
 
   async function persist(id: string, patch: Partial<Requisite>) {
-    await supabase.from('requisites').update(patch).eq('id', id);
+    await fetch(`/api/requisites/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(patch),
+    });
   }
 
   async function removeRow(id: string) {
     setItems((prev) => prev.filter((item) => item.id !== id));
-    await supabase.from('requisites').delete().eq('id', id);
+    await fetch(`/api/requisites/${id}`, { method: 'DELETE' });
   }
 
   async function move(id: string, direction: -1 | 1) {
@@ -156,8 +162,8 @@ export function RequisitesEditor({
     setItems(reordered);
 
     await Promise.all([
-      supabase.from('requisites').update({ sort_order: neighbor.sort_order }).eq('id', current.id),
-      supabase.from('requisites').update({ sort_order: current.sort_order }).eq('id', neighbor.id),
+      persist(current.id, { sort_order: neighbor.sort_order }),
+      persist(neighbor.id, { sort_order: current.sort_order }),
     ]);
   }
 

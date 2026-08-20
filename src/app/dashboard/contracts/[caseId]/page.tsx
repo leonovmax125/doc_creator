@@ -1,5 +1,7 @@
 import { notFound } from 'next/navigation';
-import { createClient } from '@/lib/supabase/server';
+import { sql } from '@/lib/db';
+import { getCurrentUser } from '@/lib/auth/session';
+import { fileUrl } from '@/lib/files';
 import { CaseDetail, type CaseVersionItem } from '@/components/case-detail';
 import type { CaseStatus } from '@/lib/case-status';
 
@@ -9,49 +11,40 @@ export default async function CaseDetailPage({
   params: Promise<{ caseId: string }>;
 }) {
   const { caseId } = await params;
-  const supabase = await createClient();
+  const user = await getCurrentUser();
+  if (!user) notFound();
 
-  const { data: caseRow } = await supabase
-    .from('cases')
-    .select('id, title, status, client:clients(id, name)')
-    .eq('id', caseId)
-    .single();
-
+  const caseRows = await sql<{ id: string; title: string; status: CaseStatus; client_name: string }[]>`
+    select c.id, c.title, c.status, cl.name as client_name
+    from cases c
+    join clients cl on cl.id = c.client_id
+    where c.id = ${caseId} and c.user_id = ${user.id}
+    limit 1
+  `;
+  const caseRow = caseRows[0];
   if (!caseRow) notFound();
 
-  const { data: versions } = await supabase
-    .from('contract_versions')
-    .select('id, version_number, mode, docx_path, created_at')
-    .eq('case_id', caseId)
-    .order('version_number', { ascending: false });
+  const versions = await sql<
+    { id: string; version_number: number; mode: string; docx_path: string | null; created_at: string }[]
+  >`
+    select id, version_number, mode, docx_path, created_at from contract_versions
+    where case_id = ${caseId} order by version_number desc
+  `;
 
-  const versionItems: CaseVersionItem[] = await Promise.all(
-    (versions ?? []).map(async (v) => {
-      let url: string | null = null;
-      if (v.docx_path) {
-        const { data } = await supabase.storage.from('contracts').createSignedUrl(v.docx_path, 3600);
-        url = data?.signedUrl ?? null;
-      }
-      return {
-        id: v.id,
-        versionNumber: v.version_number,
-        mode: v.mode,
-        createdAt: v.created_at,
-        url,
-      };
-    }),
-  );
-
-  const client = (Array.isArray(caseRow.client) ? caseRow.client[0] : caseRow.client) as
-    | { id: string; name: string }
-    | null;
+  const versionItems: CaseVersionItem[] = versions.map((v) => ({
+    id: v.id,
+    versionNumber: v.version_number,
+    mode: v.mode,
+    createdAt: v.created_at,
+    url: fileUrl('contracts', v.docx_path),
+  }));
 
   return (
     <CaseDetail
       caseId={caseRow.id}
       title={caseRow.title}
-      status={caseRow.status as CaseStatus}
-      clientName={client?.name ?? '—'}
+      status={caseRow.status}
+      clientName={caseRow.client_name}
       versions={versionItems}
     />
   );

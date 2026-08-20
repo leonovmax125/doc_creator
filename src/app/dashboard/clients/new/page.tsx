@@ -2,7 +2,6 @@
 
 import { useState, type FormEvent } from 'react';
 import { useRouter } from 'next/navigation';
-import { createClient } from '@/lib/supabase/client';
 
 export default function NewClientPage() {
   const router = useRouter();
@@ -22,36 +21,26 @@ export default function NewClientPage() {
     setError(null);
     setSaving(true);
 
-    const supabase = createClient();
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
-
-    if (!user) {
-      setError('Сессия истекла, войдите заново');
-      setSaving(false);
-      return;
-    }
-
-    const { data, error: insertError } = await supabase
-      .from('clients')
-      .insert({
-        user_id: user.id,
+    const response = await fetch('/api/clients', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
         name: name.trim(),
-        country: country.trim() || null,
-        contact_person: contactPerson.trim() || null,
-        notes: notes.trim() || null,
-      })
-      .select('id')
-      .single();
+        country: country.trim(),
+        contact_person: contactPerson.trim(),
+        notes: notes.trim(),
+      }),
+    });
 
-    if (insertError || !data) {
-      setError('Не удалось создать клиента');
+    if (!response.ok) {
+      const data = await response.json().catch(() => null);
+      setError(data?.error ?? 'Не удалось создать клиента');
       setSaving(false);
       return;
     }
 
-    router.push(`/dashboard/clients/${data.id}`);
+    const { id } = await response.json();
+    router.push(`/dashboard/clients/${id}`);
   }
 
   return (

@@ -1,15 +1,15 @@
-import { createClient } from '@/lib/supabase/server';
+import { sql } from '@/lib/db';
+import { getCurrentUser } from '@/lib/auth/session';
 import { ChangePassword } from '@/components/change-password';
 
 export default async function ProfilePage() {
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-
-  const { data: profile } = user
-    ? await supabase.from('profiles').select('full_name, email, created_at').eq('id', user.id).single()
-    : { data: null };
+  const user = await getCurrentUser();
+  const rows = user
+    ? await sql<{ full_name: string; email: string; created_at: string }[]>`
+        select full_name, email, created_at from users where id = ${user.id} limit 1
+      `
+    : [];
+  const profile = rows[0] ?? null;
 
   return (
     <div className="max-w-sm space-y-4">

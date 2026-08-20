@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
-import { createClient } from '@/lib/supabase/server';
+import { sql } from '@/lib/db';
+import { getCurrentUser } from '@/lib/auth/session';
 import { buildDocxFromBlocks } from '@/lib/build-docx';
 import { saveContractVersion } from '@/lib/save-contract';
 import { normalizeBlocks } from '@/lib/template-types';
@@ -8,10 +9,7 @@ export const runtime = 'nodejs';
 
 /** Сохраняет текущие блоки как НОВУЮ версию в том же деле (v+1). */
 export async function POST(request: Request) {
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const user = await getCurrentUser();
   if (!user) return NextResponse.json({ error: 'Не авторизован' }, { status: 401 });
 
   const { caseId, blocks: rawBlocks } = (await request.json()) as {
@@ -19,17 +17,14 @@ export async function POST(request: Request) {
     blocks: unknown;
   };
 
-  const { data: caseRow } = await supabase
-    .from('cases')
-    .select('id, client_id, client:clients(name)')
-    .eq('id', caseId)
-    .single();
-
-  if (!caseRow) return NextResponse.json({ error: 'Дело не найдено' }, { status: 404 });
-
-  const client = (Array.isArray(caseRow.client) ? caseRow.client[0] : caseRow.client) as
-    | { name: string }
-    | null;
+  const rows = await sql<{ client_id: string; client_name: string }[]>`
+    select c.client_id, cl.name as client_name
+    from cases c
+    join clients cl on cl.id = c.client_id
+    where c.id = ${caseId} and c.user_id = ${user.id}
+    limit 1
+  `;
+  if (!rows[0]) return NextResponse.json({ error: 'Дело не найдено' }, { status: 404 });
 
   const blocks = normalizeBlocks(rawBlocks);
   if (blocks.length === 0) {
@@ -43,9 +38,9 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: 'Не удалось собрать документ' }, { status: 500 });
   }
 
-  const result = await saveContractVersion(supabase, user.id, {
-    clientId: caseRow.client_id,
-    clientName: client?.name ?? 'клиент',
+  const result = await saveContractVersion(user.id, {
+    clientId: rows[0].client_id,
+    clientName: rows[0].client_name ?? 'клиент',
     mode: 'generative',
     templateId: null,
     blocks,

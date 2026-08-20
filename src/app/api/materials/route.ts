@@ -1,19 +1,16 @@
 import { NextResponse } from 'next/server';
-import { createClient } from '@/lib/supabase/server';
+import { randomUUID } from 'node:crypto';
+import { sql } from '@/lib/db';
+import { getCurrentUser } from '@/lib/auth/session';
+import { putObject } from '@/lib/storage/local';
 import { extractText } from '@/lib/extract-text';
 import { MATERIAL_TYPES, type MaterialType } from '@/lib/material-types';
 
 export const runtime = 'nodejs';
 
 export async function POST(request: Request) {
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-
-  if (!user) {
-    return NextResponse.json({ error: 'Не авторизован' }, { status: 401 });
-  }
+  const user = await getCurrentUser();
+  if (!user) return NextResponse.json({ error: 'Не авторизован' }, { status: 401 });
 
   const formData = await request.formData();
   const name = formData.get('name');
@@ -32,10 +29,7 @@ export async function POST(request: Request) {
 
   const tags =
     typeof tagsRaw === 'string'
-      ? tagsRaw
-          .split(',')
-          .map((t) => t.trim())
-          .filter(Boolean)
+      ? tagsRaw.split(',').map((t) => t.trim()).filter(Boolean)
       : [];
 
   let content = typeof contentText === 'string' ? contentText : '';
@@ -53,35 +47,18 @@ export async function POST(request: Request) {
     }
 
     const ext = file.name.slice(file.name.lastIndexOf('.')) || '';
-    filePath = `${user.id}/${crypto.randomUUID()}${ext}`;
-    const { error: uploadError } = await supabase.storage
-      .from('materials')
-      .upload(filePath, buffer, { contentType: file.type || 'application/octet-stream' });
-
-    if (uploadError) {
-      return NextResponse.json({ error: 'Не удалось загрузить файл' }, { status: 500 });
-    }
+    filePath = `${user.id}/${randomUUID()}${ext}`;
+    await putObject('materials', filePath, buffer);
 
     // Текст из файла дополняет введённый вручную (если тот был).
     content = [content, extracted].filter(Boolean).join('\n\n').trim();
   }
 
-  const { data, error: insertError } = await supabase
-    .from('materials')
-    .insert({
-      user_id: user.id,
-      name: name.trim(),
-      type,
-      content_text: content,
-      file_path: filePath,
-      tags,
-    })
-    .select('id')
-    .single();
+  const rows = await sql<{ id: string }[]>`
+    insert into materials (user_id, name, type, content_text, file_path, tags)
+    values (${user.id}, ${name.trim()}, ${type}, ${content}, ${filePath}, ${tags})
+    returning id
+  `;
 
-  if (insertError || !data) {
-    return NextResponse.json({ error: 'Не удалось сохранить материал' }, { status: 500 });
-  }
-
-  return NextResponse.json({ id: data.id });
+  return NextResponse.json({ id: rows[0].id });
 }

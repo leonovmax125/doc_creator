@@ -2,7 +2,6 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
-import { createClient } from '@/lib/supabase/client';
 import type { TemplateField } from '@/lib/template-types';
 
 type Client = { id: string; name: string };
@@ -60,7 +59,6 @@ export function ContractWizard({
   preset?: WizardPreset;
   initialClientId?: string;
 }) {
-  const supabase = createClient();
   const isNewVersion = !!preset;
   const [step, setStep] = useState(preset ? 4 : 1);
   const [mode, setMode] = useState<Mode>('strict');
@@ -111,39 +109,40 @@ export function ContractWizard({
 
   useEffect(() => {
     if (!selectedClientId) return;
-    supabase
-      .from('requisites')
-      .select('field_key, field_value')
-      .eq('owner_type', 'client')
-      .eq('owner_id', selectedClientId)
-      .then(({ data }) => {
+    let cancelled = false;
+    fetch(`/api/clients/${selectedClientId}/requisites`)
+      .then((r) => (r.ok ? r.json() : { requisites: [] }))
+      .then(({ requisites }) => {
+        if (cancelled) return;
         const map: Record<string, string> = {};
-        for (const row of data ?? []) map[row.field_key] = row.field_value;
+        for (const row of requisites ?? []) map[row.field_key] = row.field_value;
         setClientValues(map);
-      });
-  }, [selectedClientId, supabase]);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedClientId]);
 
   async function handleCreateClient() {
     if (!newClientName.trim()) return;
     setCreatingClient(true);
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
-    if (!user) return;
 
-    const { data, error: insertError } = await supabase
-      .from('clients')
-      .insert({ user_id: user.id, name: newClientName.trim() })
-      .select('id, name')
-      .single();
+    const response = await fetch('/api/clients', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: newClientName.trim() }),
+    });
 
     setCreatingClient(false);
-    if (insertError || !data) {
+    if (!response.ok) {
       setError('Не удалось создать клиента');
       return;
     }
-    setClientList((prev) => [...prev, data]);
-    setSelectedClientId(data.id);
+    const { id } = await response.json();
+    const created = { id, name: newClientName.trim() };
+    setClientList((prev) => [...prev, created]);
+    setSelectedClientId(id);
     setNewClientMode(false);
     setNewClientName('');
   }

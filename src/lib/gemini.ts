@@ -1,5 +1,5 @@
 import { GoogleGenAI } from '@google/genai';
-import type { SupabaseClient } from '@supabase/supabase-js';
+import { sql } from './db';
 import { coerceText, type Block } from './template-types';
 
 // Flash — для правок и разбора, Pro — для генерации с нуля (см. CLAUDE.md, шаг 5).
@@ -10,12 +10,14 @@ export const GEMINI_FLASH = 'gemini-flash-latest';
 export const GEMINI_PRO = 'gemini-pro-latest';
 
 /**
- * Ключ Gemini: сначала личный ключ пользователя из user_settings (RLS вернёт
- * только его собственную строку), иначе общий ключ из переменной окружения.
+ * Ключ Gemini: сначала личный ключ пользователя из user_settings, иначе общий
+ * ключ из переменной окружения.
  */
-export async function resolveGeminiKey(supabase: SupabaseClient): Promise<string | null> {
-  const { data } = await supabase.from('user_settings').select('gemini_api_key').maybeSingle();
-  const personal = data?.gemini_api_key?.trim();
+export async function resolveGeminiKey(userId: string): Promise<string | null> {
+  const rows = await sql<{ gemini_api_key: string | null }[]>`
+    select gemini_api_key from user_settings where user_id = ${userId} limit 1
+  `;
+  const personal = rows[0]?.gemini_api_key?.trim();
   return personal || process.env.GEMINI_API_KEY?.trim() || null;
 }
 
