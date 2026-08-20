@@ -1,0 +1,31 @@
+# Postgres для self-hosted версии (dev на своей машине и prod на VPS).
+# Запуск:   docker compose up -d
+# Логи:     docker compose logs -f db
+# Стоп:     docker compose down   (данные останутся в томе pgdata)
+#
+# Данные лежат в именованном томе pgdata и переживают перезапуск/обновление.
+# Пароль и имя базы берутся из .env (см. .env.vps.example).
+
+services:
+  db:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-doc}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-docpass}
+      POSTGRES_DB: ${POSTGRES_DB:-doc_creator}
+    ports:
+      # Наружу отдаём только на localhost — база не должна торчать в интернет.
+      - '127.0.0.1:5432:5432'
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      # Схема применяется автоматически при первом старте пустого тома.
+      - ./deploy/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U ${POSTGRES_USER:-doc} -d ${POSTGRES_DB:-doc_creator}']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  pgdata:
