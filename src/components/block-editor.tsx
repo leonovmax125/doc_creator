@@ -1,7 +1,6 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import { createClient } from '@/lib/supabase/client';
 import { renumberBlocks, blocksToPreviewHtml } from '@/lib/block-utils';
 import type { Block } from '@/lib/template-types';
 
@@ -63,7 +62,6 @@ export function BlockEditor({
   initialBlocks: Block[];
   initialMessages: ChatMessage[];
 }) {
-  const supabase = createClient();
   const [blocks, setBlocks] = useState<Block[]>(initialBlocks);
   const [messages, setMessages] = useState<ChatMessage[]>(initialMessages);
   const [chatInput, setChatInput] = useState('');
@@ -90,13 +88,17 @@ export function BlockEditor({
     setSaveStatus('saving');
     if (saveTimer.current) clearTimeout(saveTimer.current);
     saveTimer.current = setTimeout(async () => {
-      await supabase.from('contract_versions').update({ blocks }).eq('id', versionId);
+      await fetch(`/api/versions/${versionId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ blocks }),
+      });
       setSaveStatus('saved');
     }, 800);
     return () => {
       if (saveTimer.current) clearTimeout(saveTimer.current);
     };
-  }, [blocks, versionId, supabase]);
+  }, [blocks, versionId]);
 
   function updateBlocks(next: Block[], renumber = false) {
     setBlocks(renumber ? renumberBlocks(next) : next);
@@ -129,12 +131,15 @@ export function BlockEditor({
   }
 
   async function persistMessage(role: 'user' | 'assistant', content: string) {
-    const { data } = await supabase
-      .from('chat_messages')
-      .insert({ version_id: versionId, role, content })
-      .select('id, role, content')
-      .single();
-    if (data) setMessages((prev) => [...prev, data as ChatMessage]);
+    const response = await fetch('/api/chat-messages', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ versionId, role, content }),
+    });
+    if (response.ok) {
+      const { message } = await response.json();
+      if (message) setMessages((prev) => [...prev, message as ChatMessage]);
+    }
   }
 
   async function sendToAi() {

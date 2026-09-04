@@ -1,5 +1,7 @@
 import { NextResponse } from 'next/server';
-import { createClient } from '@/lib/supabase/server';
+import { sql } from '@/lib/db';
+import { getCurrentUser } from '@/lib/auth/session';
+import { getObject } from '@/lib/storage/local';
 import { generateJson, resolveGeminiKey, GEMINI_FLASH } from '@/lib/gemini';
 import { buildPatchPrompt } from '@/lib/ai-prompts';
 import { applyDocxPatch, type PatchEdit } from '@/lib/apply-docx-patch';
@@ -22,10 +24,7 @@ type Body = {
 type Requisite = { field_label: string; field_value: string };
 
 export async function POST(request: Request) {
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const user = await getCurrentUser();
   if (!user) return NextResponse.json({ error: 'Не авторизован' }, { status: 401 });
 
   const body = (await request.json()) as Body;
@@ -37,17 +36,20 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: 'Выберите шаблон и опишите правку' }, { status: 400 });
   }
 
-  const { data: client } = await supabase.from('clients').select('id, name').eq('id', clientId).single();
+  const clientRows = await sql<{ id: string; name: string }[]>`
+    select id, name from clients where id = ${clientId} and user_id = ${user.id} limit 1
+  `;
+  const client = clientRows[0];
   if (!client) return NextResponse.json({ error: 'Клиент не найден' }, { status: 404 });
 
-  const { data: template } = await supabase
-    .from('templates')
-    .select('blocks, fields, source_file_path')
-    .eq('id', body.templateId)
-    .single();
+  const templateRows = await sql<{ blocks: unknown; fields: unknown; source_file_path: string }[]>`
+    select blocks, fields, source_file_path from templates
+    where id = ${body.templateId} and user_id = ${user.id} limit 1
+  `;
+  const template = templateRows[0];
   if (!template) return NextResponse.json({ error: 'Шаблон не найден' }, { status: 404 });
 
-  const apiKey = await resolveGeminiKey(supabase);
+  const apiKey = await resolveGeminiKey(user.id);
   if (!apiKey) {
     return NextResponse.json(
       { error: 'Не задан ключ Gemini. Добавьте свой ключ в Настройках → Ключи ИИ.' },
@@ -55,47 +57,39 @@ export async function POST(request: Request) {
     );
   }
 
-  // Реквизиты сторон — чтобы ИИ мог подставить данные клиента.
-  const { data: organization } = await supabase.from('organizations').select('id').single();
-  const { data: orgReqRows } = organization
-    ? await supabase
-        .from('requisites')
-        .select('field_label, field_value')
-        .eq('owner_type', 'organization')
-        .eq('owner_id', organization.id)
-        .order('sort_order')
-    : { data: [] };
-  const { data: clientReqRows } = await supabase
-    .from('requisites')
-    .select('field_label, field_value')
-    .eq('owner_type', 'client')
-    .eq('owner_id', clientId)
-    .order('sort_order');
-  const orgRequisites = ((orgReqRows ?? []) as Requisite[]).filter((r) => r.field_value);
-  const clientRequisites = ((clientReqRows ?? []) as Requisite[]).filter((r) => r.field_value);
+  const orgReqRows = await sql<Requisite[]>`
+    select r.field_label, r.field_value from requisites r
+    join organizations o on o.id = r.owner_id
+    where r.owner_type = 'organization' and o.owner_id = ${user.id}
+    order by r.sort_order
+  `;
+  const clientReqRows = await sql<Requisite[]>`
+    select field_label, field_value from requisites
+    where owner_type = 'client' and owner_id = ${clientId}
+    order by sort_order
+  `;
+  const orgRequisites = orgReqRows.filter((r) => r.field_value);
+  const clientRequisites = clientReqRows.filter((r) => r.field_value);
 
-  // Материалы.
   const materials: { name: string; content: string }[] = [];
-  if ((body.materialIds ?? []).length > 0) {
-    const { data: rows } = await supabase
-      .from('materials')
-      .select('name, content_text')
-      .in('id', body.materialIds as string[]);
-    for (const row of rows ?? []) {
+  const materialIds = (body.materialIds ?? []).filter(Boolean);
+  if (materialIds.length > 0) {
+    const rows = await sql<{ name: string; content_text: string }[]>`
+      select name, content_text from materials
+      where user_id = ${user.id} and id = any(${materialIds})
+    `;
+    for (const row of rows) {
       if (row.content_text) materials.push({ name: row.name, content: row.content_text });
     }
   }
 
-  // Исходный .docx — его и патчим, чтобы сохранить оформление.
-  const { data: templateFile, error: downloadError } = await supabase.storage
-    .from('templates')
-    .download(template.source_file_path);
-  if (downloadError || !templateFile) {
+  let templateBuffer: Buffer;
+  try {
+    templateBuffer = await getObject('templates', template.source_file_path);
+  } catch {
     return NextResponse.json({ error: 'Не удалось загрузить файл шаблона' }, { status: 500 });
   }
-  const templateBuffer = Buffer.from(await templateFile.arrayBuffer());
 
-  // Текст договора для модели — реальный (плейсхолдеры разметки подставляем обратно).
   const realBlocks = unmarkTemplate(
     normalizeBlocks(template.blocks),
     (template.fields ?? []) as TemplateField[],
@@ -132,7 +126,6 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: 'Не удалось применить правки к документу' }, { status: 500 });
   }
 
-  // Блоки готового документа — для предпросмотра и дальнейшего редактирования.
   let blocks;
   try {
     blocks = await parseDocxToBlocks(patched.buffer);
@@ -140,13 +133,13 @@ export async function POST(request: Request) {
     blocks = realBlocks;
   }
 
-  const result = await saveContractVersion(supabase, user.id, {
+  const result = await saveContractVersion(user.id, {
     clientId,
     clientName: client.name,
     mode: 'assisted',
     templateId: body.templateId,
     blocks,
-    data: { instruction, materialIds: body.materialIds ?? [] },
+    data: { instruction, materialIds },
     docxBuffer: patched.buffer,
     caseId: body.caseId ?? null,
     caseTitle: body.caseTitle ?? null,

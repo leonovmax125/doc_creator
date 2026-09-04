@@ -1,7 +1,6 @@
 'use client';
 
 import { useState } from 'react';
-import { createClient } from '@/lib/supabase/client';
 
 type ChatMessage = { id: string; role: 'user' | 'assistant'; content: string };
 
@@ -18,7 +17,6 @@ export function RefineChat({
   initialUrl: string | null;
   initialFilename: string;
 }) {
-  const supabase = createClient();
   const [messages, setMessages] = useState<ChatMessage[]>(initialMessages);
   const [input, setInput] = useState('');
   const [busy, setBusy] = useState(false);
@@ -26,21 +24,16 @@ export function RefineChat({
   const [url, setUrl] = useState<string | null>(initialUrl);
   const [filename, setFilename] = useState(initialFilename);
 
-  async function persistMessage(role: 'user' | 'assistant', content: string) {
-    const { data } = await supabase
-      .from('chat_messages')
-      .insert({ version_id: versionId, role, content })
-      .select('id, role, content')
-      .single();
-    return data as ChatMessage | null;
-  }
-
   // Показываем сообщение сразу (локально), а сохранение в БД — фоновое и
   // необязательное: чат работает, даже если история почему-то не пишется.
   function addMessage(role: 'user' | 'assistant', content: string) {
     const local: ChatMessage = { id: `local-${Date.now()}-${Math.random()}`, role, content };
     setMessages((prev) => [...prev, local]);
-    persistMessage(role, content).catch(() => {});
+    fetch('/api/chat-messages', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ versionId, role, content }),
+    }).catch(() => {});
   }
 
   async function send() {

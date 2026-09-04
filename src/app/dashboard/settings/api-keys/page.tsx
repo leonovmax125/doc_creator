@@ -1,21 +1,16 @@
-import { createClient } from '@/lib/supabase/server';
+import { sql } from '@/lib/db';
+import { getCurrentUser } from '@/lib/auth/session';
 import { ApiKeyEditor } from '@/components/api-key-editor';
 
 export default async function ApiKeysPage() {
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-
+  const user = await getCurrentUser();
   if (!user) return null;
 
-  const { data: settings } = await supabase
-    .from('user_settings')
-    .select('gemini_api_key')
-    .eq('user_id', user.id)
-    .maybeSingle();
+  const rows = await sql<{ gemini_api_key: string | null }[]>`
+    select gemini_api_key from user_settings where user_id = ${user.id} limit 1
+  `;
 
-  const key = settings?.gemini_api_key ?? null;
+  const key = rows[0]?.gemini_api_key ?? null;
   const masked = key ? `${key.slice(0, 4)}…${key.slice(-4)}` : null;
 
   return <ApiKeyEditor userId={user.id} hasKey={!!key} maskedKey={masked} />;

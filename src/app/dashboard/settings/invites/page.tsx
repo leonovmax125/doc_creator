@@ -1,27 +1,16 @@
 import { redirect } from 'next/navigation';
-import { createClient } from '@/lib/supabase/server';
+import { sql } from '@/lib/db';
+import { getCurrentUser } from '@/lib/auth/session';
 import { InvitesManager, type InviteRow } from '@/components/invites-manager';
 
 export default async function InvitesPage() {
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-
+  const user = await getCurrentUser();
   if (!user) redirect('/login');
+  if (!user.is_admin) redirect('/dashboard/settings/requisites');
 
-  const { data: profile } = await supabase
-    .from('profiles')
-    .select('is_admin')
-    .eq('id', user.id)
-    .maybeSingle();
+  const codes = await sql<InviteRow[]>`
+    select code, is_used, created_at from invite_codes order by created_at desc
+  `;
 
-  if (!profile?.is_admin) redirect('/dashboard/settings/requisites');
-
-  const { data: codes } = await supabase
-    .from('invite_codes')
-    .select('code, is_used, created_at')
-    .order('created_at', { ascending: false });
-
-  return <InvitesManager initialCodes={(codes ?? []) as InviteRow[]} />;
+  return <InvitesManager initialCodes={codes} />;
 }

@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { createClient } from '@/lib/supabase/server';
+import { getCurrentUser } from '@/lib/auth/session';
 import { generateBlocks, resolveGeminiKey, GEMINI_FLASH } from '@/lib/gemini';
 import { buildEditPrompt } from '@/lib/ai-prompts';
 import { normalizeBlocks } from '@/lib/template-types';
@@ -8,11 +8,7 @@ export const runtime = 'nodejs';
 export const maxDuration = 60;
 
 export async function POST(request: Request) {
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-
+  const user = await getCurrentUser();
   if (!user) {
     return NextResponse.json({ error: 'Не авторизован' }, { status: 401 });
   }
@@ -25,7 +21,7 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: 'Не хватает данных для правки' }, { status: 400 });
   }
 
-  const apiKey = await resolveGeminiKey(supabase);
+  const apiKey = await resolveGeminiKey(user.id);
   if (!apiKey) {
     return NextResponse.json(
       { error: 'Не задан ключ Gemini. Добавьте свой ключ в Настройках → Ключи ИИ.' },

@@ -1,6 +1,7 @@
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
-import { createClient } from '@/lib/supabase/server';
+import { sql } from '@/lib/db';
+import { getCurrentUser } from '@/lib/auth/session';
 import { BlockEditor } from '@/components/block-editor';
 import { normalizeBlocks } from '@/lib/template-types';
 
@@ -10,21 +11,22 @@ export default async function VersionEditorPage({
   params: Promise<{ caseId: string; versionId: string }>;
 }) {
   const { caseId, versionId } = await params;
-  const supabase = await createClient();
+  const user = await getCurrentUser();
+  if (!user) notFound();
 
-  const { data: version } = await supabase
-    .from('contract_versions')
-    .select('id, case_id, version_number, blocks')
-    .eq('id', versionId)
-    .single();
-
+  const versionRows = await sql<{ id: string; case_id: string; version_number: number; blocks: unknown }[]>`
+    select v.id, v.case_id, v.version_number, v.blocks
+    from contract_versions v
+    join cases c on c.id = v.case_id
+    where v.id = ${versionId} and c.user_id = ${user.id}
+    limit 1
+  `;
+  const version = versionRows[0];
   if (!version || version.case_id !== caseId) notFound();
 
-  const { data: messages } = await supabase
-    .from('chat_messages')
-    .select('id, role, content')
-    .eq('version_id', versionId)
-    .order('created_at');
+  const messages = await sql<{ id: string; role: 'user' | 'assistant'; content: string }[]>`
+    select id, role, content from chat_messages where version_id = ${versionId} order by created_at
+  `;
 
   return (
     <div>
@@ -39,7 +41,7 @@ export default async function VersionEditorPage({
         caseId={caseId}
         versionNumber={version.version_number}
         initialBlocks={normalizeBlocks(version.blocks)}
-        initialMessages={(messages ?? []) as { id: string; role: 'user' | 'assistant'; content: string }[]}
+        initialMessages={messages}
       />
     </div>
   );

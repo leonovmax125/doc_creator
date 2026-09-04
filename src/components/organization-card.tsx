@@ -1,7 +1,6 @@
 'use client';
 
 import { useState, type ChangeEvent } from 'react';
-import { createClient } from '@/lib/supabase/client';
 import { hasTransparency } from '@/lib/check-transparency';
 import { RequisitesEditor, type Requisite } from './requisites-editor';
 
@@ -27,10 +26,13 @@ export function OrganizationCard({
   const [logoUrl, setLogoUrl] = useState(initialLogoUrl);
   const [transparencyWarning, setTransparencyWarning] = useState(false);
   const [uploading, setUploading] = useState(false);
-  const supabase = createClient();
 
   async function persistOrganization(patch: Partial<Pick<Organization, 'name' | 'country'>>) {
-    await supabase.from('organizations').update(patch).eq('id', organization.id);
+    await fetch('/api/organization', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(patch),
+    });
   }
 
   async function handleLogoChange(event: ChangeEvent<HTMLInputElement>) {
@@ -40,15 +42,14 @@ export function OrganizationCard({
     setTransparencyWarning(!(await hasTransparency(file)));
     setUploading(true);
 
-    const path = `${organization.owner_id}/logo.png`;
-    const { error: uploadError } = await supabase.storage
-      .from('logos')
-      .upload(path, file, { upsert: true, contentType: 'image/png' });
+    const form = new FormData();
+    form.set('file', file);
+    const response = await fetch('/api/organization/logo', { method: 'POST', body: form });
 
-    if (!uploadError) {
-      await supabase.from('organizations').update({ logo_path: path }).eq('id', organization.id);
-      const { data } = await supabase.storage.from('logos').createSignedUrl(path, 3600);
-      setLogoUrl(data?.signedUrl ?? null);
+    if (response.ok) {
+      const { url } = await response.json();
+      // Добавляем метку времени, чтобы браузер не показал старый лого из кэша.
+      setLogoUrl(url ? `${url}?t=${Date.now()}` : null);
     }
 
     setUploading(false);

@@ -1,5 +1,6 @@
 import { notFound } from 'next/navigation';
-import { createClient } from '@/lib/supabase/server';
+import { sql } from '@/lib/db';
+import { getCurrentUser } from '@/lib/auth/session';
 import { ContractWizard, type WizardPreset } from '@/components/contract-wizard';
 import type { TemplateField } from '@/lib/template-types';
 
@@ -9,68 +10,54 @@ export default async function NewVersionPage({
   params: Promise<{ caseId: string }>;
 }) {
   const { caseId } = await params;
-  const supabase = await createClient();
+  const user = await getCurrentUser();
+  if (!user) notFound();
 
-  const { data: caseRow } = await supabase
-    .from('cases')
-    .select('id, title, client_id')
-    .eq('id', caseId)
-    .single();
-
+  const caseRows = await sql<{ id: string; title: string; client_id: string }[]>`
+    select id, title, client_id from cases where id = ${caseId} and user_id = ${user.id} limit 1
+  `;
+  const caseRow = caseRows[0];
   if (!caseRow) notFound();
 
-  const { data: lastVersion } = await supabase
-    .from('contract_versions')
-    .select('template_id, data')
-    .eq('case_id', caseId)
-    .order('version_number', { ascending: false })
-    .limit(1)
-    .maybeSingle();
-
+  const lastVersionRows = await sql<{ template_id: string | null; data: { values?: Record<string, string> } }[]>`
+    select template_id, data from contract_versions
+    where case_id = ${caseId} order by version_number desc limit 1
+  `;
+  const lastVersion = lastVersionRows[0];
   if (!lastVersion?.template_id) notFound();
 
-  const { data: clients } = await supabase.from('clients').select('id, name').order('name');
+  const [clients, templates, orgRequisites, stamps] = await Promise.all([
+    sql`select id, name from clients where user_id = ${user.id} order by name`,
+    sql<{ id: string; name: string; category: string | null; fields: unknown }[]>`
+      select id, name, category, fields from templates where user_id = ${user.id} order by name
+    `,
+    sql`
+      select r.field_key, r.field_label, r.field_value from requisites r
+      join organizations o on o.id = r.owner_id
+      where r.owner_type = 'organization' and o.owner_id = ${user.id}
+    `,
+    sql`select id, name, type from stamps where user_id = ${user.id} order by created_at desc`,
+  ]);
 
-  const { data: templates } = await supabase
-    .from('templates')
-    .select('id, name, category, fields')
-    .order('name');
-
-  const { data: organization } = await supabase.from('organizations').select('id').single();
-
-  const { data: orgRequisites } = organization
-    ? await supabase
-        .from('requisites')
-        .select('field_key, field_label, field_value')
-        .eq('owner_type', 'organization')
-        .eq('owner_id', organization.id)
-    : { data: [] };
-
-  const { data: stamps } = await supabase
-    .from('stamps')
-    .select('id, name, type')
-    .order('created_at', { ascending: false });
-
-  const versionData = (lastVersion.data ?? {}) as { values?: Record<string, string> };
   const preset: WizardPreset = {
     caseId: caseRow.id,
     caseTitle: caseRow.title,
     clientId: caseRow.client_id,
     templateId: lastVersion.template_id,
-    values: versionData.values ?? {},
+    values: lastVersion.data?.values ?? {},
   };
 
   return (
     <ContractWizard
-      clients={clients ?? []}
-      templates={(templates ?? []).map((t) => ({
+      clients={clients as never}
+      templates={templates.map((t) => ({
         id: t.id,
         name: t.name,
         category: t.category,
         fields: (t.fields ?? []) as TemplateField[],
       }))}
-      orgRequisites={orgRequisites ?? []}
-      stamps={stamps ?? []}
+      orgRequisites={orgRequisites as never}
+      stamps={stamps as never}
       preset={preset}
     />
   );

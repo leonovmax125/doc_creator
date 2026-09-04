@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { createClient } from '@/lib/supabase/server';
+import { getCurrentUser } from '@/lib/auth/session';
 import { extractText } from '@/lib/extract-text';
 import { generateJson, resolveGeminiKey, GEMINI_FLASH, type InlineImage } from '@/lib/gemini';
 import { buildExtractRequisitesPrompt, buildExtractRequisitesFromImagePrompt } from '@/lib/ai-prompts';
@@ -19,10 +19,7 @@ const IMAGE_MIME: Record<string, string> = {
 /** Извлекает реквизиты из загруженного документа (.docx/.pdf/.txt) или картинки
  *  (скрин/фото .png/.jpg/.webp) через ИИ. */
 export async function POST(request: Request) {
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const user = await getCurrentUser();
   if (!user) return NextResponse.json({ error: 'Не авторизован' }, { status: 401 });
 
   const formData = await request.formData();
@@ -56,7 +53,7 @@ export async function POST(request: Request) {
     prompt = buildExtractRequisitesPrompt(text);
   }
 
-  const apiKey = await resolveGeminiKey(supabase);
+  const apiKey = await resolveGeminiKey(user.id);
   if (!apiKey) {
     return NextResponse.json(
       { error: 'Не задан ключ Gemini. Добавьте свой ключ в Настройках → Ключи ИИ.' },

@@ -2,7 +2,6 @@
 
 import { useState } from 'react';
 import Link from 'next/link';
-import { createClient } from '@/lib/supabase/client';
 import { RequisitesEditor, type Requisite } from './requisites-editor';
 import { CASE_STATUS_LABELS, CASE_STATUS_BADGE, type CaseStatus } from '@/lib/case-status';
 
@@ -29,10 +28,13 @@ export function ClientCard({
   const [country, setCountry] = useState(client.country ?? '');
   const [contactPerson, setContactPerson] = useState(client.contact_person ?? '');
   const [notes, setNotes] = useState(client.notes ?? '');
-  const supabase = createClient();
 
   async function persist(patch: Partial<Client>) {
-    await supabase.from('clients').update(patch).eq('id', client.id);
+    await fetch(`/api/clients/${client.id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(patch),
+    });
   }
 
   return (

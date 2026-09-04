@@ -1,9 +1,7 @@
 'use client';
 
 import { useState, type FormEvent } from 'react';
-import { createClient } from '@/lib/supabase/client';
 import { PasswordField } from '@/components/password-field';
-import { translateAuthError } from '@/lib/auth-errors';
 
 /** Смена пароля для уже вошедшего пользователя (Настройки → Профиль). */
 export function ChangePassword() {
@@ -24,12 +22,16 @@ export function ChangePassword() {
     }
 
     setLoading(true);
-    const supabase = createClient();
-    const { error: updateError } = await supabase.auth.updateUser({ password });
+    const response = await fetch('/api/auth/change-password', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ password }),
+    });
     setLoading(false);
 
-    if (updateError) {
-      setError(translateAuthError(updateError.message));
+    if (!response.ok) {
+      const data = await response.json().catch(() => null);
+      setError(data?.error ?? 'Не удалось сменить пароль. Попробуйте ещё раз.');
       return;
     }
 

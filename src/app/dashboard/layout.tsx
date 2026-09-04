@@ -1,5 +1,5 @@
 import { redirect } from 'next/navigation';
-import { createClient } from '@/lib/supabase/server';
+import { getCurrentUser } from '@/lib/auth/session';
 import { BottomNavLinks } from '@/components/nav-links';
 import { LogoutButton } from '@/components/logout-button';
 import { Sidebar } from '@/components/sidebar';
@@ -9,20 +9,10 @@ export default async function DashboardLayout({
 }: {
   children: React.ReactNode;
 }) {
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const user = await getCurrentUser();
+  if (!user) redirect('/login');
 
-  const { data: profile } = user
-    ? await supabase.from('profiles').select('full_name').eq('id', user.id).maybeSingle()
-    : { data: null };
-
-  if (user && !profile) {
-    redirect('/complete-registration');
-  }
-
-  const displayName = profile?.full_name ?? user?.email ?? '';
+  const displayName = user.full_name || user.email;
 
   return (
     <div className="min-h-screen md:flex">
