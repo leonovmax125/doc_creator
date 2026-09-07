@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { createClient } from '@/lib/supabase/server';
 import { extractText } from '@/lib/extract-text';
-import { generateJson, resolveGeminiKey, GEMINI_FLASH, type InlineImage } from '@/lib/gemini';
+import { generateJson, resolveGeminiKey, resolveGeminiModel, type InlineImage } from '@/lib/gemini';
 import { buildExtractRequisitesPrompt, buildExtractRequisitesFromImagePrompt } from '@/lib/ai-prompts';
 
 export const runtime = 'nodejs';
@@ -65,7 +65,7 @@ export async function POST(request: Request) {
   }
 
   try {
-    const raw = await generateJson(GEMINI_FLASH, prompt, apiKey, image);
+    const raw = await generateJson(await resolveGeminiModel(supabase), prompt, apiKey, image);
     const list = (raw as { requisites?: unknown }).requisites;
     const requisites = Array.isArray(list)
       ? list

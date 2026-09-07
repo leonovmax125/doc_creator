@@ -1,13 +1,13 @@
 import { GoogleGenAI } from '@google/genai';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { coerceText, type Block } from './template-types';
+import { GEMINI_FLASH, GEMINI_PRO, GEMINI_FLASH_LITE, GEMINI_MODELS } from './gemini-models';
 
 // Flash — для правок и разбора, Pro — для генерации с нуля (см. CLAUDE.md, шаг 5).
-// Используем стабильные алиасы -latest: конкретные версии (например
-// gemini-2.5-flash) закрываются Google для новых пользователей, а -latest
-// всегда указывает на доступную актуальную модель. Поменяйте id при желании.
-export const GEMINI_FLASH = 'gemini-flash-latest';
-export const GEMINI_PRO = 'gemini-pro-latest';
+// Идентификаторы моделей и список для выбора — в ./gemini-models (client-safe).
+export { GEMINI_FLASH, GEMINI_PRO, GEMINI_FLASH_LITE, GEMINI_MODELS };
+
+const ALLOWED_MODELS = new Set(GEMINI_MODELS.map((m) => m.id));
 
 /**
  * Ключ Gemini: сначала личный ключ пользователя из user_settings (RLS вернёт
@@ -17,6 +17,13 @@ export async function resolveGeminiKey(supabase: SupabaseClient): Promise<string
   const { data } = await supabase.from('user_settings').select('gemini_api_key').maybeSingle();
   const personal = data?.gemini_api_key?.trim();
   return personal || process.env.GEMINI_API_KEY?.trim() || null;
+}
+
+/** Выбранная пользователем модель Gemini (или Flash по умолчанию). */
+export async function resolveGeminiModel(supabase: SupabaseClient): Promise<string> {
+  const { data } = await supabase.from('user_settings').select('gemini_model').maybeSingle();
+  const model = data?.gemini_model?.trim();
+  return model && ALLOWED_MODELS.has(model) ? model : GEMINI_FLASH;
 }
 
 function makeClient(apiKey: string): GoogleGenAI {
@@ -46,7 +53,9 @@ export type InlineImage = { data: string; mimeType: string };
  * (503/429/UNAVAILABLE) повторяет запрос с паузой, затем бросает понятную
  * ошибку по-русски вместо технического JSON от Google.
  */
-export async function generateJson(
+/** Одна модель с повторами при временной перегрузке. Пробрасывает исходную
+ *  ошибку наверх, чтобы выше можно было решить про откат на лёгкую модель. */
+async function attemptModel(
   model: string,
   prompt: string,
   apiKey: string,
@@ -82,12 +91,36 @@ export async function generateJson(
         await sleep(delays[attempt]);
         continue;
       }
-      if (isTransient(err)) {
-        throw new Error('ИИ сейчас перегружен. Подождите несколько секунд и попробуйте ещё раз.');
-      }
       throw err;
     }
   }
+}
+
+export async function generateJson(
+  model: string,
+  prompt: string,
+  apiKey: string,
+  image?: InlineImage,
+): Promise<unknown> {
+  // Если выбранная модель перегружена даже после повторов — автоматически
+  // пробуем более лёгкую Flash-Lite (у неё запас по нагрузке), потом сдаёмся.
+  const chain = model === GEMINI_FLASH_LITE ? [model] : [model, GEMINI_FLASH_LITE];
+  let lastError: unknown;
+
+  for (const m of chain) {
+    try {
+      return await attemptModel(m, prompt, apiKey, image);
+    } catch (err) {
+      lastError = err;
+      if (isTransient(err)) continue; // занята — пробуем следующую модель
+      throw err; // настоящая ошибка — не имеет смысла менять модель
+    }
+  }
+
+  if (isTransient(lastError)) {
+    throw new Error('ИИ сейчас перегружен. Подождите несколько секунд и попробуйте ещё раз.');
+  }
+  throw lastError instanceof Error ? lastError : new Error('Модель вернула ошибку');
 }
 
 /**

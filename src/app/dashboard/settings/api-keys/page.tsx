@@ -11,12 +11,19 @@ export default async function ApiKeysPage() {
 
   const { data: settings } = await supabase
     .from('user_settings')
-    .select('gemini_api_key')
+    .select('gemini_api_key, gemini_model')
     .eq('user_id', user.id)
     .maybeSingle();
 
   const key = settings?.gemini_api_key ?? null;
   const masked = key ? `${key.slice(0, 4)}…${key.slice(-4)}` : null;
 
-  return <ApiKeyEditor userId={user.id} hasKey={!!key} maskedKey={masked} />;
+  return (
+    <ApiKeyEditor
+      userId={user.id}
+      hasKey={!!key}
+      maskedKey={masked}
+      currentModel={settings?.gemini_model ?? null}
+    />
+  );
 }

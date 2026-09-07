@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { createClient } from '@/lib/supabase/server';
-import { generateJson, resolveGeminiKey, GEMINI_FLASH } from '@/lib/gemini';
+import { generateJson, resolveGeminiKey, resolveGeminiModel } from '@/lib/gemini';
 import { buildAutoMarkupPrompt } from '@/lib/ai-prompts';
 import { applyAutoMarkup, type AutoMarkupProposal } from '@/lib/auto-markup';
 import { getMarkableUnits, normalizeBlocks, type TemplateField } from '@/lib/template-types';
@@ -73,7 +73,7 @@ export async function POST(request: Request) {
       orgRequisites: orgRequisites ?? [],
       clientRequisites,
     });
-    const raw = await generateJson(GEMINI_FLASH, prompt, apiKey);
+    const raw = await generateJson(await resolveGeminiModel(supabase), prompt, apiKey);
     const arr = (raw as { fields?: unknown })?.fields;
     proposals = Array.isArray(arr) ? (arr as AutoMarkupProposal[]) : [];
   } catch (err) {

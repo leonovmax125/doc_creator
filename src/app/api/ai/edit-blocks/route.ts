@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { createClient } from '@/lib/supabase/server';
-import { generateBlocks, resolveGeminiKey, GEMINI_FLASH } from '@/lib/gemini';
+import { generateBlocks, resolveGeminiKey, resolveGeminiModel } from '@/lib/gemini';
 import { buildEditPrompt } from '@/lib/ai-prompts';
 import { normalizeBlocks } from '@/lib/template-types';
 
@@ -35,7 +35,7 @@ export async function POST(request: Request) {
 
   try {
     const prompt = buildEditPrompt(blocks, instruction);
-    const updated = await generateBlocks(GEMINI_FLASH, prompt, apiKey);
+    const updated = await generateBlocks(await resolveGeminiModel(supabase), prompt, apiKey);
     return NextResponse.json({ blocks: updated });
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Не удалось обработать запрос';
