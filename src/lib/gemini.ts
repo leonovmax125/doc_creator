@@ -3,8 +3,9 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { coerceText, type Block } from './template-types';
 import { GEMINI_FLASH, GEMINI_PRO, GEMINI_FLASH_LITE, GEMINI_MODELS } from './gemini-models';
 
-// Flash — для правок и разбора, Pro — для генерации с нуля (см. CLAUDE.md, шаг 5).
-// Идентификаторы моделей и список для выбора — в ./gemini-models (client-safe).
+// Идентификаторы моделей Gemini и список для выбора — в ./gemini-models (client-safe).
+// Модель для ИИ-операций выбирает пользователь (Настройки → Ключи ИИ); по умолчанию
+// Flash. При перегрузке выбранной модели generateJson сам откатывается на Flash-Lite.
 export { GEMINI_FLASH, GEMINI_PRO, GEMINI_FLASH_LITE, GEMINI_MODELS };
 
 const ALLOWED_MODELS = new Set(GEMINI_MODELS.map((m) => m.id));
@@ -19,11 +20,20 @@ export async function resolveGeminiKey(supabase: SupabaseClient): Promise<string
   return personal || process.env.GEMINI_API_KEY?.trim() || null;
 }
 
-/** Выбранная пользователем модель Gemini (или Flash по умолчанию). */
-export async function resolveGeminiModel(supabase: SupabaseClient): Promise<string> {
-  const { data } = await supabase.from('user_settings').select('gemini_model').maybeSingle();
-  const model = data?.gemini_model?.trim();
-  return model && ALLOWED_MODELS.has(model) ? model : GEMINI_FLASH;
+/**
+ * Ключ и выбранная модель одним запросом к user_settings (на «горячем» ИИ-пути
+ * не делаем два отдельных SELECT одной и той же строки).
+ */
+export async function resolveGeminiSettings(
+  supabase: SupabaseClient,
+): Promise<{ apiKey: string | null; model: string }> {
+  const { data } = await supabase
+    .from('user_settings')
+    .select('gemini_api_key, gemini_model')
+    .maybeSingle();
+  const apiKey = data?.gemini_api_key?.trim() || process.env.GEMINI_API_KEY?.trim() || null;
+  const chosen = data?.gemini_model?.trim();
+  return { apiKey, model: chosen && ALLOWED_MODELS.has(chosen) ? chosen : GEMINI_FLASH };
 }
 
 function makeClient(apiKey: string): GoogleGenAI {
@@ -47,14 +57,9 @@ function isTransient(err: unknown): boolean {
 
 export type InlineImage = { data: string; mimeType: string };
 
-/**
- * Запрашивает у модели строго JSON по тексту и/или изображению (Gemini —
- * мультимодальная модель, читает скрины/фото). При временной перегрузке
- * (503/429/UNAVAILABLE) повторяет запрос с паузой, затем бросает понятную
- * ошибку по-русски вместо технического JSON от Google.
- */
 /** Одна модель с повторами при временной перегрузке. Пробрасывает исходную
- *  ошибку наверх, чтобы выше можно было решить про откат на лёгкую модель. */
+ *  ошибку наверх (в т.ч. перегрузку), чтобы generateJson решил про откат на
+ *  лёгкую модель и итоговое сообщение пользователю. */
 async function attemptModel(
   model: string,
   prompt: string,
@@ -62,7 +67,9 @@ async function attemptModel(
   image?: InlineImage,
 ): Promise<unknown> {
   const ai = makeClient(apiKey);
-  const delays = [1500, 4000, 8000];
+  // Держим суммарные паузы небольшими: с учётом отката на вторую модель и
+  // лимита времени функции (maxDuration) длинные повторы приводили к 504.
+  const delays = [1500, 4000];
 
   const contents = image
     ? [{ role: 'user', parts: [{ text: prompt }, { inlineData: image }] }]
@@ -96,6 +103,12 @@ async function attemptModel(
   }
 }
 
+/**
+ * Запрашивает у модели строго JSON по тексту и/или изображению (Gemini —
+ * мультимодальная модель, читает скрины/фото). Повторяет запрос при временной
+ * перегрузке; если выбранная модель занята даже после повторов — автоматически
+ * пробует лёгкую Flash-Lite, и лишь затем бросает понятную ошибку по-русски.
+ */
 export async function generateJson(
   model: string,
   prompt: string,
@@ -132,16 +145,22 @@ export async function generateBlocks(
   prompt: string,
   apiKey: string,
 ): Promise<Block[]> {
-  let lastError: unknown;
+  // generateJson сам повторяет запрос и откатывается на лёгкую модель при
+  // перегрузке — его ошибку здесь НЕ повторяем (иначе удвоили бы время и могли
+  // выйти за лимит времени функции). Повторяем только когда модель вернула
+  // корректный JSON, но непригодную структуру блоков.
+  let lastParseError: unknown;
   for (let attempt = 0; attempt < 2; attempt += 1) {
+    const raw = await generateJson(model, prompt, apiKey); // перегрузку/ошибку API пробрасываем сразу
     try {
-      const raw = await generateJson(model, prompt, apiKey);
       return parseBlocksFromAi(raw);
     } catch (err) {
-      lastError = err;
+      lastParseError = err;
     }
   }
-  throw lastError instanceof Error ? lastError : new Error('Модель вернула некорректный ответ');
+  throw lastParseError instanceof Error
+    ? lastParseError
+    : new Error('Модель вернула некорректный ответ');
 }
 
 const VALID_TYPES = new Set([

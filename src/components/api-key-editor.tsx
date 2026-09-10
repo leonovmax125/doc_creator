@@ -22,15 +22,24 @@ export function ApiKeyEditor({
   const [currentHasKey, setCurrentHasKey] = useState(hasKey);
   const [model, setModel] = useState(currentModel || GEMINI_FLASH);
   const [modelSaved, setModelSaved] = useState(false);
+  const [modelError, setModelError] = useState<string | null>(null);
 
   async function saveModel(next: string) {
+    const prev = model;
     setModel(next);
     setModelSaved(false);
-    await supabase.from('user_settings').upsert({
+    setModelError(null);
+    const { error } = await supabase.from('user_settings').upsert({
       user_id: userId,
       gemini_model: next,
       updated_at: new Date().toISOString(),
     });
+    if (error) {
+      // Откатываем выбор в UI, чтобы он не расходился с тем, что реально в базе.
+      setModel(prev);
+      setModelError('Не удалось сохранить модель. Попробуйте ещё раз.');
+      return;
+    }
     setModelSaved(true);
   }
 
@@ -124,6 +133,11 @@ export function ApiKeyEditor({
           Если выбранная модель всё же занята, приложение само пробует Flash-Lite.
           {modelSaved && <span className="ml-1 text-[var(--accent-soft-fg)]">Сохранено.</span>}
         </p>
+        {modelError && (
+          <p className="mt-1 text-xs" style={{ color: 'var(--danger)' }}>
+            {modelError}
+          </p>
+        )}
       </div>
     </div>
   );

@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { createClient } from '@/lib/supabase/server';
-import { generateJson, resolveGeminiKey, resolveGeminiModel } from '@/lib/gemini';
+import { generateJson, resolveGeminiSettings } from '@/lib/gemini';
 import { buildPatchPrompt } from '@/lib/ai-prompts';
 import { applyDocxPatch, type PatchEdit } from '@/lib/apply-docx-patch';
 import { parseDocxToBlocks } from '@/lib/docx-to-blocks';
@@ -47,7 +47,7 @@ export async function POST(request: Request) {
     .single();
   if (!template) return NextResponse.json({ error: 'Шаблон не найден' }, { status: 404 });
 
-  const apiKey = await resolveGeminiKey(supabase);
+  const { apiKey, model } = await resolveGeminiSettings(supabase);
   if (!apiKey) {
     return NextResponse.json(
       { error: 'Не задан ключ Gemini. Добавьте свой ключ в Настройках → Ключи ИИ.' },
@@ -114,7 +114,7 @@ export async function POST(request: Request) {
       clientRequisites,
       orgRequisites,
     });
-    const raw = await generateJson(await resolveGeminiModel(supabase), prompt, apiKey);
+    const raw = await generateJson(model, prompt, apiKey);
     const list = (raw as { edits?: unknown }).edits;
     edits = Array.isArray(list) ? (list as PatchEdit[]) : [];
   } catch (err) {

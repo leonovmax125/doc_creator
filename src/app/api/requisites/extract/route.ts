@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { createClient } from '@/lib/supabase/server';
 import { extractText } from '@/lib/extract-text';
-import { generateJson, resolveGeminiKey, resolveGeminiModel, type InlineImage } from '@/lib/gemini';
+import { generateJson, resolveGeminiSettings, type InlineImage } from '@/lib/gemini';
 import { buildExtractRequisitesPrompt, buildExtractRequisitesFromImagePrompt } from '@/lib/ai-prompts';
 
 export const runtime = 'nodejs';
@@ -56,7 +56,7 @@ export async function POST(request: Request) {
     prompt = buildExtractRequisitesPrompt(text);
   }
 
-  const apiKey = await resolveGeminiKey(supabase);
+  const { apiKey, model } = await resolveGeminiSettings(supabase);
   if (!apiKey) {
     return NextResponse.json(
       { error: 'Не задан ключ Gemini. Добавьте свой ключ в Настройках → Ключи ИИ.' },
@@ -65,7 +65,7 @@ export async function POST(request: Request) {
   }
 
   try {
-    const raw = await generateJson(await resolveGeminiModel(supabase), prompt, apiKey, image);
+    const raw = await generateJson(model, prompt, apiKey, image);
     const list = (raw as { requisites?: unknown }).requisites;
     const requisites = Array.isArray(list)
       ? list

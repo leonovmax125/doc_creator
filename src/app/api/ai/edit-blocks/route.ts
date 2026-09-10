@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { createClient } from '@/lib/supabase/server';
-import { generateBlocks, resolveGeminiKey, resolveGeminiModel } from '@/lib/gemini';
+import { generateBlocks, resolveGeminiSettings } from '@/lib/gemini';
 import { buildEditPrompt } from '@/lib/ai-prompts';
 import { normalizeBlocks } from '@/lib/template-types';
 
@@ -25,7 +25,7 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: 'Не хватает данных для правки' }, { status: 400 });
   }
 
-  const apiKey = await resolveGeminiKey(supabase);
+  const { apiKey, model } = await resolveGeminiSettings(supabase);
   if (!apiKey) {
     return NextResponse.json(
       { error: 'Не задан ключ Gemini. Добавьте свой ключ в Настройках → Ключи ИИ.' },
@@ -35,7 +35,7 @@ export async function POST(request: Request) {
 
   try {
     const prompt = buildEditPrompt(blocks, instruction);
-    const updated = await generateBlocks(await resolveGeminiModel(supabase), prompt, apiKey);
+    const updated = await generateBlocks(model, prompt, apiKey);
     return NextResponse.json({ blocks: updated });
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Не удалось обработать запрос';

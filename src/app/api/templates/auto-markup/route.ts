@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { createClient } from '@/lib/supabase/server';
-import { generateJson, resolveGeminiKey, resolveGeminiModel } from '@/lib/gemini';
+import { generateJson, resolveGeminiSettings } from '@/lib/gemini';
 import { buildAutoMarkupPrompt } from '@/lib/ai-prompts';
 import { applyAutoMarkup, type AutoMarkupProposal } from '@/lib/auto-markup';
 import { getMarkableUnits, normalizeBlocks, type TemplateField } from '@/lib/template-types';
@@ -58,7 +58,7 @@ export async function POST(request: Request) {
     clientRequisites = Array.from(seen, ([field_key, field_label]) => ({ field_key, field_label }));
   }
 
-  const apiKey = await resolveGeminiKey(supabase);
+  const { apiKey, model } = await resolveGeminiSettings(supabase);
   if (!apiKey) {
     return NextResponse.json(
       { error: 'Не задан ключ Gemini. Добавьте свой ключ в Настройках → Ключи ИИ.' },
@@ -73,7 +73,7 @@ export async function POST(request: Request) {
       orgRequisites: orgRequisites ?? [],
       clientRequisites,
     });
-    const raw = await generateJson(await resolveGeminiModel(supabase), prompt, apiKey);
+    const raw = await generateJson(model, prompt, apiKey);
     const arr = (raw as { fields?: unknown })?.fields;
     proposals = Array.isArray(arr) ? (arr as AutoMarkupProposal[]) : [];
   } catch (err) {
