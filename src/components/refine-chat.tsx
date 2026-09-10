@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import { createClient } from '@/lib/supabase/client';
+import { DictationButton } from '@/components/dictation-button';
 
 type ChatMessage = { id: string; role: 'user' | 'assistant'; content: string };
 
@@ -146,19 +147,24 @@ export function RefineChat({
               {error}
             </p>
           )}
-          <textarea
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' && !e.shiftKey) {
-                e.preventDefault();
-                send();
-              }
-            }}
-            rows={2}
-            placeholder="Например: срок оказания услуг сделай до 15 сентября 2026"
-            className="input-field resize-none"
-          />
+          <div className="flex items-end gap-2">
+            <textarea
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                  e.preventDefault();
+                  send();
+                }
+              }}
+              rows={2}
+              placeholder="Например: срок оказания услуг сделай до 15 сентября 2026"
+              className="input-field flex-1 resize-none"
+            />
+            <DictationButton
+              onText={(t) => setInput((prev) => (prev.trim() ? `${prev.trim()} ${t}` : t))}
+            />
+          </div>
           <button
             type="button"
             onClick={send}

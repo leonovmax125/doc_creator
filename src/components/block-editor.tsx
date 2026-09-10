@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { createClient } from '@/lib/supabase/client';
 import { renumberBlocks, blocksToPreviewHtml } from '@/lib/block-utils';
+import { DictationButton } from '@/components/dictation-button';
 import type { Block } from '@/lib/template-types';
 
 type ChatMessage = { id: string; role: 'user' | 'assistant'; content: string };
@@ -380,19 +381,24 @@ export function BlockEditor({
               )}
             </div>
             <div className="border-t border-border p-3">
-              <textarea
-                value={chatInput}
-                onChange={(e) => setChatInput(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter' && !e.shiftKey) {
-                    e.preventDefault();
-                    sendToAi();
-                  }
-                }}
-                rows={2}
-                placeholder="Например: перепиши раздел об ответственности мягче"
-                className="input-field resize-none"
-              />
+              <div className="flex items-end gap-2">
+                <textarea
+                  value={chatInput}
+                  onChange={(e) => setChatInput(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && !e.shiftKey) {
+                      e.preventDefault();
+                      sendToAi();
+                    }
+                  }}
+                  rows={2}
+                  placeholder="Например: перепиши раздел об ответственности мягче"
+                  className="input-field flex-1 resize-none"
+                />
+                <DictationButton
+                  onText={(t) => setChatInput((prev) => (prev.trim() ? `${prev.trim()} ${t}` : t))}
+                />
+              </div>
               <button
                 type="button"
                 onClick={sendToAi}

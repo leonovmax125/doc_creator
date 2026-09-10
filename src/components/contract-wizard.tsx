@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { createClient } from '@/lib/supabase/client';
 import type { TemplateField } from '@/lib/template-types';
+import { DictationButton } from '@/components/dictation-button';
 
 type Client = { id: string; name: string };
 type Template = { id: string; name: string; category: string | null; fields: TemplateField[] };
@@ -556,13 +557,20 @@ export function ContractWizard({
               {mode === 'assisted' && (
                 <>
                   <h2 className="mb-3 text-lg font-semibold text-fg">Что изменить в шаблоне</h2>
-                  <textarea
-                    value={instruction}
-                    onChange={(e) => setInstruction(e.target.value)}
-                    rows={5}
-                    placeholder="Например: убери пункт про предоплату, добавь раздел о конфиденциальности, срок сделай 3 месяца"
-                    className="input-field"
-                  />
+                  <div className="flex items-start gap-2">
+                    <textarea
+                      value={instruction}
+                      onChange={(e) => setInstruction(e.target.value)}
+                      rows={5}
+                      placeholder="Например: убери пункт про предоплату, добавь раздел о конфиденциальности, срок сделай 3 месяца"
+                      className="input-field flex-1"
+                    />
+                    <DictationButton
+                      onText={(t) =>
+                        setInstruction((prev) => (prev.trim() ? `${prev.trim()} ${t}` : t))
+                      }
+                    />
+                  </div>
                   <p className="mt-2 text-xs text-muted">
                     ИИ внесёт правки прямо в ваш .docx, сохранив оформление, и подставит реквизиты
                     выбранного клиента. Опишите словами, что поменять.
